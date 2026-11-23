@@ -447,3 +447,12 @@ test('chromeCandidatesForUi 返回去重后的候选列表', async () => {
   assert.equal(uniq.size, list.length, '候选列表应已去重');
   assert.ok(list.every((p) => typeof p === 'string' && p.toLowerCase().endsWith('.exe')));
 });
+
+// ============ 账号可改配置（方案解析）============
+test('默认方案包含全部可配字段（供账号回退使用）', () => {
+  const keys = Object.keys(DEFAULT_PROFILE_VALUES);
+  assert.ok(keys.length >= 14, '默认方案字段数应完整，实际 ' + keys.length);
+  assert.ok(keys.includes('chromePath'));
+  assert.ok(keys.includes('idleTimeoutSec'));
+  assert.ok(keys.includes('keepAliveSec'));
+});

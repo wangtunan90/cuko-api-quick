@@ -146,6 +146,36 @@
   </section>
 </main>
 
+
+<!-- 账号配置编辑弹窗 -->
+<div id="editModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;align-items:center;justify-content:center">
+  <div class="card" style="width:520px;max-width:92vw;background:var(--panel);border:1px solid var(--line)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <strong id="editTitle">配置账号</strong>
+      <button class="ghost small" onclick="closeEditModal()">✕</button>
+    </div>
+    <div style="margin-bottom:14px">
+      <label>显示名称</label>
+      <input id="editModelName" style="width:100%" placeholder="Quick 主账号">
+      <div class="hint">客户端模型列表里显示的名字，随时可改</div>
+    </div>
+    <div style="margin-bottom:14px">
+      <label>配置方案</label>
+      <select id="editProfile" style="width:100%"></select>
+      <div class="hint" id="editProfileHint"></div>
+      <div class="hint">切换后立即对下一次请求生效，不用重启服务</div>
+    </div>
+    <div style="margin-bottom:16px">
+      <label>调试端口</label>
+      <div class="hint" style="margin:0">端口 <code id="editPort"></code>（创建时分配，不支持修改）</div>
+    </div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="ghost" onclick="closeEditModal()">取消</button>
+      <button onclick="saveAccountConfig()">保存</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -191,6 +221,7 @@ async function loadAccounts() {
         + '<td>'
         + '<button class="small ghost" onclick="openAccount(\'' + esc(a.modelId) + '\')">打开</button> '
         + '<button class="small ghost" onclick="checkHealth(\'' + esc(a.modelId) + '\')">检查</button> '
+        + '<button class="small" onclick="editAccountConfig(\'' + esc(a.modelId) + '\')">配置</button> '
         + '<button class="small ghost" onclick="renameAccount(\'' + esc(a.modelId) + '\')">改名</button> '
         + '<button class="small danger" onclick="delAccount(\'' + esc(a.modelId) + '\')">删除</button>'
         + '</td></tr>';
@@ -311,6 +342,50 @@ async function delProfile(id) {
   if (!confirm('删除该配置方案？使用它的账号会回退到默认方案。')) return;
   try { await api('DELETE', '/api/profiles/' + encodeURIComponent(id)); toast('已删除', 'ok'); loadProfiles(); loadAccounts(); }
   catch (e) { toast(e.message, 'err'); }
+}
+
+// ---------- 账号配置编辑 ----------
+let EDIT_ACCOUNT = null;
+
+async function editAccountConfig(modelId) {
+  const accounts = await api('GET', '/api/accounts');
+  const acc = accounts.find(a => a.modelId === modelId);
+  if (!acc) return toast('账号不存在', 'err');
+  EDIT_ACCOUNT = acc;
+
+  const profiles = await api('GET', '/api/profiles');
+  const opts = [{ id: 'default', name: '默认方案（只读）' }].concat(profiles.profiles || []);
+
+  $('#editTitle').textContent = '配置账号：' + modelId;
+  $('#editModelName').value = acc.modelName || '';
+  $('#editProfile').innerHTML = opts
+    .map(p => '<option value="' + esc(p.id) + '"' + ((acc.profileId || 'default') === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>')
+    .join('');
+  $('#editPort').textContent = acc.debugPort;
+
+  // 显示当前生效方案的参数摘要，方便判断选哪个
+  const eff = opts.find(p => p.id === (acc.profileId || 'default'));
+  $('#editProfileHint').textContent = '当前生效：' + (eff ? eff.name : '默认方案');
+
+  $('#editModal').style.display = 'flex';
+}
+
+function closeEditModal() {
+  $('#editModal').style.display = 'none';
+  EDIT_ACCOUNT = null;
+}
+
+async function saveAccountConfig() {
+  if (!EDIT_ACCOUNT) return;
+  const modelName = $('#editModelName').value.trim();
+  const profileId = $('#editProfile').value;
+  if (!modelName) return toast('显示名称不能为空', 'err');
+  try {
+    await api('PUT', '/api/accounts/' + encodeURIComponent(EDIT_ACCOUNT.modelId), { modelName, profileId });
+    toast('已保存', 'ok');
+    closeEditModal();
+    loadAccounts();
+  } catch (e) { toast(e.message, 'err'); }
 }
 
 // ---------- Chrome 检测 ----------
