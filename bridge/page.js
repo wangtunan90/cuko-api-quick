@@ -519,24 +519,37 @@ export const TURN_ENDED_EXPR = `(() => {
     return s.visibility !== 'hidden' && s.display !== 'none';
   };
 
-  // 1) 停止按钮：存在 = 正在生成
-  const stopBtn = document.querySelector('button[data-automation-id="chat-stop"]');
+  // 【核心判据】停止按钮：存在且可见 = 正在生成
+  //
+  // [261123-dom-end-core] 只用这一个信号判断「是否还在生成」。
+  //
+  // 为什么不再看输入框是否为空：
+  //   用户完全可能在等回复的时候又往输入框里打字（想问下一个问题），
+  //   这时输入框非空，但 AI 那边早就答完了。
+  //   拿「输入框空」当必要条件会导致永远判不出结束。
+  //
+  // 停止按钮才是唯一可靠的「是否在生成」信号：
+  //   生成中 → <button data-automation-id="chat-stop" aria-label="停止生成">
+  //   空闲   → 该按钮消失，换回 chat-send
+  const stopBtn = document.querySelector('button[data-automation-id="chat-stop"]')
+    || document.querySelector('button[aria-label*="停止生成"]')
+    || document.querySelector('button[aria-label*="Stop generating" i]');
   const generating = !!stopBtn && visible(stopBtn);
 
-  // 2) 发送按钮：disabled = 输入框空（我们的消息被消费掉了）
+  // 以下只作为诊断信息返回，不参与 ended 判定
   const sendBtn = document.querySelector('button[data-automation-id="chat-send"]')
     || document.querySelector('button[aria-label="发送消息"]');
   const hasSend = !!sendBtn && visible(sendBtn);
   const sendDisabled = hasSend ? !!sendBtn.disabled : null;
 
-  // 3) 输入框是否为空
   const ta = document.querySelector('textarea[placeholder*="提问"]')
     || document.querySelector('textarea');
-  const taEmpty = ta ? String(ta.value || '').trim().length === 0 : false;
+  const taValue = ta ? String(ta.value || '') : '';
+  const taEmpty = taValue.trim().length === 0;
 
-  // 「本轮已结束」= 不在生成 且 输入框空
-  // （输入框空说明我们发的那条已经被页面吃掉了，不会是「还没发出去」）
-  const ended = !generating && taEmpty;
+  // 「本轮已结束」= 停止按钮不存在（不在生成）
+  // 输入框有没有内容完全不参与判断
+  const ended = !generating;
 
   return {
     ended,
@@ -544,6 +557,7 @@ export const TURN_ENDED_EXPR = `(() => {
     hasSend,
     sendDisabled,
     taEmpty,
+    taLen: taValue.length,
     hasStopSelector: !!stopBtn,
     url: location.href,
   };

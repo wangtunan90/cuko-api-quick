@@ -541,9 +541,22 @@ test('DOM 判定表达式使用稳定标识 data-automation-id', () => {
   // <button data-automation-id="chat-stop" aria-label="停止生成">
   // 用 data-automation-id 比 aria-label 靠得住（中文 UI 换英文就失效）
   assert.ok(TURN_ENDED_EXPR.includes('chat-stop'), '应识别 chat-stop');
-  assert.ok(TURN_ENDED_EXPR.includes('chat-send'), '应识别 chat-send');
   assert.ok(TURN_ENDED_EXPR.includes('ended'), '应返回 ended 字段');
   assert.ok(TURN_ENDED_EXPR.includes('generating'), '应返回 generating 字段');
+});
+
+test('结束判定只看停止按钮，不看输入框是否为空', () => {
+  // 用户可能在等回复时又往输入框里打字（想问下一个问题），
+  // 这时输入框非空，但 AI 早就答完了。拿输入框空当必要条件会永远判不出结束。
+  assert.ok(!/ended\s*=\s*!generating\s*&&\s*taEmpty/.test(TURN_ENDED_EXPR),
+    'ended 不能依赖 taEmpty');
+  assert.ok(/ended\s*=\s*!generating/.test(TURN_ENDED_EXPR),
+    'ended 应仅由 generating 决定，实际表达式片段需包含 "ended = !generating"');
+});
+
+test('输入框状态仍作为诊断信息返回（但不参与判定）', () => {
+  assert.ok(TURN_ENDED_EXPR.includes('taEmpty'), '仍应返回 taEmpty 供排查');
+  assert.ok(TURN_ENDED_EXPR.includes('taLen'), '应返回输入框长度供排查');
 });
 
 test('停止按钮选择器优先用 data-automation-id', () => {

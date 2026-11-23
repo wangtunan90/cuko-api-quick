@@ -129,16 +129,19 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
       const generating = await isGenerating(conn).catch(() => false);
       idleStrikes++;
 
-      // [261123-dom-end] 优先用 DOM 判断：页面回到空闲就说明真的结束了。
+      // [261123-dom-end-core] 优先用 DOM 判断：停止按钮消失就说明真的结束了。
       //
-      // 但要防止误判：刚发完消息、Quick 还没开始回应时，页面也是「空闲」的
-      // （无停止按钮 + 输入框已清空）。所以要求：
-      //   · 已经收到过实质内容（exc文本不为空）
+      // 判据只看「停止按钮在不在」，**不看输入框有没有内容** ——
+      // 用户完全可能在等回复时又往输入框打字，这时输入框非空但 AI 早答完了。
+      // 拿输入框空当必要条件会导致永远判不出结束（已实测确认）。
+      //
+      // 防误判仍然需要两个前置条件（刚发完、Quick 还没开始回应时页面也没停止按钮）：
+      //   · 已经收到过实质内容
       //   · 且见过「正在生成」状态（说明回复真的开始过）
       const dom = await isTurnEndedByDom(conn).catch(() => null);
       if (dom && dom.generating) sawGenerating = true;
       if (dom && dom.ended && extractor.text.length > 0 && sawGenerating) {
-        log('DOM 判定本轮已结束（无停止按钮、输入框为空），主动收尾' +
+        log('DOM 判定本轮已结束（停止按钮已消失），主动收尾' +
           '（收到 message_complete=' + extractor.finished + '）');
         finish().catch(e => console.warn('[Chat] finish 异常:', e.message));
         return;
@@ -191,12 +194,11 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
       }
       const dom = await isTurnEndedByDom(conn).catch(() => ({ ended: true }));
       if (!dom.ended) {
-        log('收到 message_complete，但页面仍在生成中（停止按钮=' + dom.generating +
-          '，输入框空=' + dom.taEmpty + '），继续等 DOM 就绪');
+        log('收到 message_complete，但停止按钮仍在（还在生成），继续等 DOM 就绪');
         scheduleFinishConfirm();
         return;
       }
-      log('已确认本轮结束（DOM：无停止按钮、输入框为空）');
+      log('已确认本轮结束（DOM：停止按钮已消失）');
       finish().catch(e => console.warn('[Chat] finish 异常:', e.message));
     }, FINISH_GRACE_MS);
   };
