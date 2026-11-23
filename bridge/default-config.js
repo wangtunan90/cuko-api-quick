@@ -67,7 +67,7 @@ export const DEFAULT_PROFILE_VALUES = Object.freeze({
 
 /** 字段中文标签（UI 展示用） */
 export const FIELD_LABELS = Object.freeze({
-  chromePath: 'Chrome 路径（留空自动探测）',
+  chromePath: 'Chrome 路径（留空自动探测：注册表 → 用户级 → 系统级 → Edge）',
   extraArgs: '额外启动参数',
   targetUrl: '启动页面 URL（/sn/start 会自动跳到聊天页）',
   connectPollMaxSec: 'CDP 端口就绪超时（秒）',

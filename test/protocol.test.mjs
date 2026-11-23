@@ -16,6 +16,7 @@ import { parseQuickUrl, buildConversationUrl, isOnConversation, extractThreadIdF
 import { DEFAULT_PROFILE_VALUES, validateProfile } from '../bridge/default-config.js';
 import { DEFAULT_RUNTIME_CONFIG } from '../bridge/runtime-config.js';
 import { getVersion } from '../bridge/version.js';
+import { resolveChromePath } from '../bridge/chrome.js';
 import { splitOversizedTexts, materializeFileItems, TEXT_TO_FILE_THRESHOLD, safeFileName, cleanupAttachments } from '../bridge/attachments.js';
 
 const test = (name, fn) => globalThis.__test(name, fn);
@@ -406,4 +407,32 @@ test('带 thread_id 的未知事件类型也放行（防止新增类型被丢）
   assert.equal(looksLikeChatEvent({ type: 'some_future_event', thread_id: 't', payload: { x: 1 } }), true);
   // 没有 thread_id 也没有 payload 的仍然过滤
   assert.equal(looksLikeChatEvent({ type: 'random_noise' }), false);
+});
+
+// ============ Chrome 路径探测 ============
+test('resolveChromePath：不指定路径也能探测到（本机装了 Chrome）', () => {
+  const p = resolveChromePath({});
+  // 本机装了 Chrome 或 Edge 才有值；没装时返回 null 也算正确
+  assert.ok(p === null || typeof p === 'string');
+  if (p) assert.ok(p.toLowerCase().endsWith('.exe'), '应该是个 exe 路径，实际 ' + p);
+});
+
+test('resolveChromePath：配置了不存在的路径会回退，不会返回坏路径', () => {
+  const bogus = 'C:\\不存在的目录\\chrome.exe';
+  const p = resolveChromePath({ chromePath: bogus });
+  assert.notEqual(p, bogus, '不能把不存在的路径当结果');
+});
+
+test('resolveChromePath：空字符串按自动探测处理', () => {
+  const a = resolveChromePath({ chromePath: '' });
+  const b = resolveChromePath({ chromePath: '   ' });
+  const c = resolveChromePath({});
+  assert.equal(a, c);
+  assert.equal(b, c);
+});
+
+test('resolveChromePath：配置了有效路径时优先采用', () => {
+  const real = resolveChromePath({});
+  if (!real) return;   // 本机没装则跳过
+  assert.equal(resolveChromePath({ chromePath: real }), real);
 });

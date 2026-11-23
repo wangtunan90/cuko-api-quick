@@ -14,6 +14,9 @@ assert.equal = (a, b, msg) => { if (a !== b) throw new Error((msg || '断言失�
 assert.ok = (v, msg) => { if (!v) throw new Error(msg || '断言失败'); };
 assert.match = (s, re, msg) => { if (!re.test(String(s))) throw new Error((msg || '断言失败') + ': 不匹配 ' + re); };
 assert.deepEqual = (a, b, msg) => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error((msg || '断言失败') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b)); };
+assert.notEqual = (a, b, msg) => { if (a === b) throw new Error((msg || '断言失败') + ': 两值不应相等，实际都是 ' + JSON.stringify(a)); };
+assert.isNull = (a, msg) => { if (a !== null) throw new Error((msg || '断言失败') + ': 应为 null，实际 ' + JSON.stringify(a)); };
+assert.throws = async (fn, msg) => { let threw = false; try { await fn(); } catch { threw = true; } if (!threw) throw new Error(msg || '断言失败：应抛异常'); };
 globalThis.__assert = assert;
 
 const dir = import.meta.dirname;

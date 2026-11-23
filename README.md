@@ -923,6 +923,31 @@ npm test
 程序会把三种解决办法直接打出来。最省事的是编辑 `data/config.json` 把 `port` 改掉再重启，
 详见[关于端口：怎么改成别的端口](#关于端口怎么改成别的端口)。
 
+**Q：日志提示「未找到 chrome.exe，请在配置方案里指定 chromePath」**
+
+服务会自动探测 Chrome，顺序是：
+
+1. **注册表** `App Paths\chrome.exe`（最权威，能覆盖自定义安装目录）
+2. **用户级安装** `%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe`（免管理员安装常见）
+3. **系统级安装** `C:\Program Files\Google\Chrome\Application\chrome.exe`
+4. **32 位 / 旧版** `C:\Program Files (x86)\...`
+5. **Edge 兜底** `msedge.exe`（同为 Chromium 内核，CDP 参数通用）
+
+如果都探测不到（或你想指定特定版本），手动填：
+
+1. 先找到你的 chrome.exe，命令行运行：
+
+   ```cmd
+   reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
+   ```
+
+   或者直接看 `%LOCALAPPDATA%\Google\Chrome\Application\`
+
+2. 打开管理台 →「配置方案」→ 展开方案 → 把 **Chrome 路径** 填成完整路径
+3. 保存后重新点「打开」或「检查」
+
+> 默认方案是只读的。要么新建一个方案，要么改已有的自定义方案。
+
 **Q：Chrome 起不来，日志里一堆 `--enable-logging=stderr` 的错误**
 
 先确认 Chrome 确实装在标准路径。装在其他位置的话，在配置方案里把 `chromePath` 填成完整路径。

@@ -6,19 +6,85 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, execFile } from 'node:child_process';
+import { spawn, execFile, execFileSync } from 'node:child_process';
 import { PROFILES_DIR } from './store.js';
 
-const DEFAULT_CHROME_PATHS = [
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-];
+/**
+ * Chrome 常见安装位置（按优先级）
+ *
+ * [261123-chrome-detect] 只探测 Program Files 两个路径是不够的 ——
+ * Chrome 允许「免管理员安装」，会装到 %LOCALAPPDATA%，大量用户是这种。
+ * 另外还有 Edge（同为 Chromium 内核，CDP 协议完全兼容）可以作为兜底。
+ */
+function chromeCandidates() {
+  const out = [];
+  const env = process.env;
 
-/** 解析 Chrome 可执行文件路径 */
+  // 1) 用户级安装（免管理员）：%LOCALAPPDATA%GoogleChromeApplication
+  if (env.LOCALAPPDATA) {
+    out.push(path.join(env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+  }
+  // 2) 系统级安装
+  if (env.ProgramFiles) {
+    out.push(path.join(env.ProgramFiles, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+  }
+  if (env['ProgramFiles(x86)']) {
+    out.push(path.join(env['ProgramFiles(x86)'], 'Google', 'Chrome', 'Application', 'chrome.exe'));
+  }
+  // 3) 写死的兜底（环境变量缺失时）
+  out.push('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe');
+  out.push('C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe');
+
+  // 4) Edge 作为最后兜底：同为 Chromium 内核，--remote-debugging-port 等参数通用
+  if (env['ProgramFiles(x86)']) {
+    out.push(path.join(env['ProgramFiles(x86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe'));
+  }
+  if (env.ProgramFiles) {
+    out.push(path.join(env.ProgramFiles, 'Microsoft', 'Edge', 'Application', 'msedge.exe'));
+  }
+  return out;
+}
+
+/** 从注册表 App Paths 里读 Chrome 路径（最权威，能覆盖自定义安装目录） */
+function chromeFromRegistry() {
+  try {
+    const keys = [
+      'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe',
+      'HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe',
+    ];
+    for (const k of keys) {
+      try {
+        const out = execFileSync('reg', ['query', k, '/ve'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+        const m = out.match(/REG_SZ\s+(.+?)\s*$/m);
+        if (m && m[1] && fs.existsSync(m[1].trim())) return m[1].trim();
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return null;
+}
+
+/**
+ * 解析 Chrome 可执行文件路径。
+ * 顺序：配置里指定的 → 注册表 → 常见安装位置（含用户级、Edge 兜底）。
+ * @param {object} cfg 配置方案 values
+ * @returns {string|null}
+ */
 export function resolveChromePath(cfg) {
   const configured = String((cfg && cfg.chromePath) || '').trim();
-  if (configured && fs.existsSync(configured)) return configured;
-  return DEFAULT_CHROME_PATHS.find(p => fs.existsSync(p)) || null;
+  if (configured) {
+    if (fs.existsSync(configured)) return configured;
+    console.warn('[Chrome] 配置里的 chromePath 不存在：' + configured);
+  }
+
+  // 注册表优先（能覆盖自定义安装目录）
+  const fromReg = chromeFromRegistry();
+  if (fromReg) return fromReg;
+
+  const hit = chromeCandidates().find((p) => p && fs.existsSync(p));
+  if (hit) return hit;
+
+  console.warn('[Chrome] 自动探测失败，尝试过的路径：\n  ' + chromeCandidates().join('\n  '));
+  return null;
 }
 
 /** 探测调试端口是否已就绪 */

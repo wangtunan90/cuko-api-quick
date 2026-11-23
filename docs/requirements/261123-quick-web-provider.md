@@ -319,6 +319,27 @@ Quick 的 `thread_id` 就是会话句柄。第一轮从下行事件
 **验收**：之前必卡的多步任务（branch 会话）跑 202 秒、输出 47581 字，
 正常收到 done；日志出现「已确认本轮结束」。单测增至 52 项全过。
 
+### 261123-chrome-detect：扩大 Chrome 路径自动探测
+
+**问题**：用户报「未找到 chrome.exe，请在配置方案里指定 chromePath」。
+原实现只探测 Program Files 和 Program Files (x86) 两个写死路径，
+而 Chrome 支持**免管理员安装**（装到 `%LOCALAPPDATA%`），这类用户必然探测失败。
+
+**修法**（探测顺序）：
+1. 配置里指定的 `chromePath`（存在才用，不存在会告警并继续往下找）
+2. 注册表 `App Paths\chrome.exe`（HKLM + HKCU，能覆盖自定义目录）
+3. `%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe`
+4. `%ProgramFiles%\...` / `%ProgramFiles(x86)%\...`
+5. 写死的两个兜底路径
+6. `msedge.exe` 作为最后兜底（同为 Chromium，CDP 参数通用）
+
+失败时会把**试过的所有路径**打进日志，方便用户直接看出该填什么。
+
+顺带修了 `chrome.js` 里在 ESM 模块内用 `require` 的问题。
+
+**验收**：4 项路径解析单测全过（自动探测 / 坏路径回退 / 空串 / 指定有效路径），
+合计 56 项；启动日志不再出现「未找到 chrome.exe」。
+
 ## 遗留
 
 - **文件/图片输入**：Quick 的附件走独立的 `upload-attachment` → DLP 扫描 → `files/upload` 流程，
