@@ -370,3 +370,40 @@ test('无 thread 或无期望值时放行', () => {
   assert.equal(isThreadAcceptable('', MAIN_SID).ok, true);
   assert.equal(isThreadAcceptable(MAIN_SID, '').ok, true);
 });
+
+// ============ 完成后又继续（agent 多步）============
+test('message_complete 之后又来 message_start 会重新打开', () => {
+  const ex = new QuickTurnExtractor();
+  ex.consume({ type: 'message_start', thread_id: 't', payload: {} });
+  ex.consume({ type: 'text_delta', payload: { delta: '第一段' } });
+  ex.consume({ type: 'message_complete', payload: { text: '第一段' } });
+  assert.equal(ex.finished, true);
+
+  // 实测会出现：第一段完成后，agent 又发 message_start 开始下一步
+  ex.consume({ type: 'message_start', thread_id: 't', payload: {} });
+  assert.equal(ex.finished, false, '不应停留在已完成状态');
+});
+
+test('重新打开后能继续累积正文，最终正常结束', () => {
+  const ex = new QuickTurnExtractor();
+  ex.consume({ type: 'message_start', payload: {} });
+  ex.consume({ type: 'text_delta', payload: { delta: 'A' } });
+  ex.consume({ type: 'message_complete', payload: { text: 'A' } });
+  ex.consume({ type: 'message_start', payload: {} });
+  ex.consume({ type: 'text_delta', payload: { delta: 'B' } });
+  ex.consume({ type: 'message_complete', payload: { text: 'B' } });
+  assert.equal(ex.finished, true);
+  assert.ok(ex.text.includes('A') && ex.text.includes('B'), '两段内容都要保留，实际: ' + ex.text);
+});
+
+test('thinking_start 属于聊天事件（曾在白名单里缺失）', async () => {
+  const { looksLikeChatEvent } = await import('../bridge/quick-transport.js');
+  assert.equal(looksLikeChatEvent({ type: 'thinking_start', thread_id: 't', payload: {} }), true);
+});
+
+test('带 thread_id 的未知事件类型也放行（防止新增类型被丢）', async () => {
+  const { looksLikeChatEvent } = await import('../bridge/quick-transport.js');
+  assert.equal(looksLikeChatEvent({ type: 'some_future_event', thread_id: 't', payload: { x: 1 } }), true);
+  // 没有 thread_id 也没有 payload 的仍然过滤
+  assert.equal(looksLikeChatEvent({ type: 'random_noise' }), false);
+});

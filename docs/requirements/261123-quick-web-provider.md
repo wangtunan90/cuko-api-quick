@@ -295,6 +295,30 @@ Quick 的 `thread_id` 就是会话句柄。第一轮从下行事件
 **验收**：分支续接 2 轮成功（9.0s / 11.4s），session 均正确回传
 `branch-498dd9e9`。单测增至 48 项全过。
 
+### 261123-finish-v2：网页结束了但客户端收不到结束
+
+上一版修了「重复发送」和「continuation 未兑现」，但用户反馈仍有卡住。
+
+抓完整事件流后发现两个真问题：
+
+1. **`message_complete` 不代表本轮结束**。实测序列是
+   `message_complete → message_start → ... → message_complete`，
+   第一段完成时 `continuation_expected` 甚至是 undefined。
+   按「收到 message_complete 就结束」会过早收尾；而只认 continuation_expected 又判断不了。
+
+2. **事件白名单漏了 `thinking_start`**，这类事件被静默丢弃。
+   白名单是硬编码的，Quick 新增类型时必然再漏。
+
+修法：
+- `QuickTurnExtractor`：收到 `message_start` 时若之前已 finished，撤销该标记（重新打开本轮）
+- `chat.js`：结束改为**延迟确认** —— `message_complete` 后挂 3s 定时器，
+  期间又来 `message_start` 就取消收尾
+- `CHAT_EVENT_HINTS` 补 `thinking_start`、`message_sources`、`runs_updated` 等
+- 增加兜底：带 `thread_id` 且 payload 是对象的未知事件一律放行
+
+**验收**：之前必卡的多步任务（branch 会话）跑 202 秒、输出 47581 字，
+正常收到 done；日志出现「已确认本轮结束」。单测增至 52 项全过。
+
 ## 遗留
 
 - **文件/图片输入**：Quick 的附件走独立的 `upload-attachment` → DLP 扫描 → `files/upload` 流程，

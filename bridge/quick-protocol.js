@@ -424,6 +424,17 @@ export class QuickTurnExtractor {
 
     switch (type) {
       case 'message_start':
+        // [261123-finish-fix] 关键：message_start 表示「又开始了新的一段」。
+        // 实测 agent 多步任务里会出现：
+        //   message_complete（第一段，不带 continuation_expected）
+        //   → message_start（下一段开始）
+        // 如果按「收到 message_complete 就结束」处理，会过早收尾，
+        // 或者反过来 —— 第一段完成后已经 finish，后续内容全部丢失。
+        // 这里收到 message_start 时撤销 finished 标记，让这一轮继续。
+        if (this._finished) {
+          this._finished = false;
+          this._eventCounts['__reopened'] = (this._eventCounts['__reopened'] || 0) + 1;
+        }
         this._sepIfNeeded();
         break;
 

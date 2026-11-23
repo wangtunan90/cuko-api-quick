@@ -48,8 +48,12 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
   let keepAliveTimer = null;
   let firstEventSeen = false;
   let branchLoggedOnce = false;
+  // [261123-finish-fix] 结束前的延迟确认定时器
+  let finishTimer = null;
+  const FINISH_GRACE_MS = 3000;
 
   const clearAllTimers = () => {
+    if (finishTimer) { clearTimeout(finishTimer); finishTimer = null; }
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
     if (totalTimer) { clearTimeout(totalTimer); totalTimer = null; }
     if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
@@ -301,8 +305,33 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
           pushSessionIdIfNeeded();
         }
         flush();
-        if (extractor.finished || extractor.error) {
+        if (extractor.error) {
           finish().catch(e => console.warn('[Chat] finish 异常:', e.message));
+          return;
+        }
+        if (extractor.finished) {
+          // [261123-finish-fix] 不要在收到 message_complete 的瞬间就结束。
+          //
+          // 实测 agent 多步任务会这样：
+          //   message_complete(第一段, 无 continuation_expected)
+          //   → message_start(下一段开始) → ... → message_complete(最后一段)
+          // 如果立即 finish，第二段及之后的内容会全部丢失；
+          // 而如果只认 continuation_expected，又会因为第一段没带这个字段而误判结束。
+          //
+          // 所以改成「延迟确认」：先挂一个短定时器，期间若又收到 message_start
+          // （extractor 会把 finished 撤掉）就取消收尾，继续等。
+          if (!finishTimer) {
+            finishTimer = setTimeout(() => {
+              finishTimer = null;
+              if (dispatched || aborted) return;
+              if (!extractor.finished) {
+                log('延迟确认期间又收到新内容，继续等待');
+                return;
+              }
+              log('已确认本轮结束');
+              finish().catch(e => console.warn('[Chat] finish 异常:', e.message));
+            }, FINISH_GRACE_MS);
+          }
         }
       },
       onError: (err) => {

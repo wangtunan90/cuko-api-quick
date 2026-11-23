@@ -25,9 +25,14 @@ export const CHAT_WS_MARK = 'quickwork-chat-bidirectional-stream';
 /** 看见这些事件才认为「这是一条聊天帧」，用于过滤无关 WebSocket 噪音 */
 const CHAT_EVENT_HINTS = new Set([
   'session_established', 'connected', 'message_start', 'text_delta', 'thinking_delta',
-  'thinking_complete', 'text_complete', 'message_complete', 'turn_usage', 'message_split',
-  'title_generated', 'stream_ended', 'turn_aborted', 'guardrail_blocked', 'stream_truncated',
-  'tool_start', 'tool_arguments', 'tool_progress', 'tool_result', 'tool_error', 'keepalive',
+  'thinking_start', 'thinking_complete', 'text_complete', 'message_complete', 'message_split',
+  'turn_usage', 'title_generated', 'stream_ended', 'turn_aborted', 'guardrail_blocked',
+  'stream_truncated', 'tool_start', 'tool_arguments', 'tool_progress', 'tool_result',
+  'tool_error', 'keepalive', 'message_sources',
+  // [261123-event-whitelist] 这些是 agent 多步任务的常规事件，
+  // 之前没进白名单会被直接丢弃。虽然不是「结束」事件，但丢了对状态判断有影响。
+  'runs_updated', 'task_list_update', 'migrationStatus', 'federate_auth_status',
+  'federate_auth_status', 'flows_list_submitted_drafts_result',
 ]);
 
 /** 判断一条 inner 事件是否属于聊天流 */
@@ -37,6 +42,10 @@ export function looksLikeChatEvent(evt) {
   if (CHAT_EVENT_HINTS.has(t)) return true;
   if (t === 'status' && evt.payload && typeof evt.payload === 'object') return true;
   if (t === 'error' && (evt.thread_id || evt.payload)) return true;
+  // [261123-event-whitelist] 兜底：带 thread_id 且 payload 是对象的事件，
+  // 基本都属于聊天流。白名单是硬编码的，Quick 新增事件类型时
+  // 靠这条避免被静默丢弃（曾经因为漏了 thinking_start 导致状态判断出错）。
+  if (evt.thread_id && evt.payload && typeof evt.payload === 'object') return true;
   return false;
 }
 

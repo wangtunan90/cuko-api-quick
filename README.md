@@ -674,6 +674,35 @@ Cuko 客户端会把**工具调用结果**当普通文本项发过来，动辄�
 
 > 分支本质是同一会话的一个可寻址视图，不是独立对话。
 
+### 完成后又继续（agent 多步）
+
+实测发现一个反直觉的情况：`message_complete` **不代表这一轮结束**。
+
+agent 多步任务会这样：
+
+```
+message_complete   ← 第一段完成（且没有 continuation_expected）
+message_start      ← 又开始了下一段！
+...
+message_complete   ← 最后一段
+```
+
+如果收到 `message_complete` 立刻收尾，第二段之后的内容就全丢了。
+
+现在的处理：
+
+- 收到 `message_complete` 后**先挂一个 3 秒的延迟确认**
+- 这 3 秒内若又来 `message_start`，就撤销"已完成"标记，继续等
+- 3 秒内没新动静，才真正结束
+
+### 事件白名单曾漏过类型
+
+Quick 的下行事件用白名单过滤，之前漏了 `thinking_start`，
+导致这类事件被静默丢弃、影响状态判断。
+
+现在除了白名单，还加了一条兜底：**带 `thread_id` 且 payload 是对象的事件一律放行**，
+避免 Quick 将来新增事件类型时又被漏掉。
+
 ### 后续步骤迟迟不来
 
 Quick 的 agent 任务可能分多步。每步结束时会给一个

@@ -245,6 +245,23 @@ Quick 的下行帧里有 `keepalive` 事件（`{"type":"keepalive","ts":...}`）
 - `thread_id` 校验对 `branch-*` 放行（视为同会话）
 - `branch-*` 可回传作为 `providerSessionId`，支持后续续接
 
+## 十一、message_complete 不代表本轮结束
+
+实测（agent 多步任务）会出现这个序列：
+
+```
+message_start
+message_complete          ← 第一段完成，且 continuation_expected 为 undefined
+message_start             ← 又开始了新的一段
+message_complete          ← 最后一段
+```
+
+因此**不能**用「收到 message_complete 就结束」来判定一轮结束，
+也不能只靠 `continuation_expected`（第一段可能根本没带这个字段）。
+
+正确做法：收到 `message_complete` 后延迟确认（约 3 秒），
+期间若又来 `message_start` 就继续；静默后才收尾。
+
 ## 九、已知限制
 
 - **单账号单并发**：同一账号同时只允许一轮对话（页面上只有一份输入区）。
