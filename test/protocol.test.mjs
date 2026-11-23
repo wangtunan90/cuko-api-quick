@@ -295,3 +295,37 @@ test('getVersion 在开发环境能读出 package.json 的版本', async () => {
 test('getVersion 多次调用结果稳定（有缓存）', () => {
   assert.equal(getVersion(), getVersion());
 });
+
+// ============ 后续步骤未到来的兜底 ============
+test('continuation_expected:true 会置 awaitingContinuation', () => {
+  const ex = new QuickTurnExtractor();
+  ex.consume({ type: 'message_complete', payload: { text: 'p1', continuation_expected: true } });
+  assert.equal(ex.finished, false);
+  assert.equal(ex.awaitingContinuation, true);
+});
+
+test('后续步骤正常到来时清空 awaitingContinuation', () => {
+  const ex = new QuickTurnExtractor();
+  ex.consume({ type: 'message_complete', payload: { text: 'p1', continuation_expected: true } });
+  ex.consume({ type: 'message_complete', payload: { text: 'p2' } });
+  assert.equal(ex.finished, true);
+  assert.equal(ex.awaitingContinuation, false);
+});
+
+test('stream_ended 能终结「等待后续」状态（兜底收尾用）', () => {
+  const ex = new QuickTurnExtractor();
+  ex.consume({ type: 'message_complete', payload: { text: 'p1', continuation_expected: true } });
+  assert.equal(ex.finished, false);
+  ex.consume({ type: 'stream_ended', payload: { message: '后续步骤超时' } });
+  assert.equal(ex.finished, true);
+});
+
+test('lastEventAt 会随事件更新', async () => {
+  const ex = new QuickTurnExtractor();
+  ex.consume({ type: 'message_start', payload: {} });
+  const t1 = ex.lastEventAt;
+  assert.ok(t1 > 0, '应该记录时间戳');
+  await new Promise((r) => setTimeout(r, 30));
+  ex.consume({ type: 'text_delta', payload: { delta: 'x' } });
+  assert.ok(ex.lastEventAt >= t1, '后续事件应更新时间戳');
+});

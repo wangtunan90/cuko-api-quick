@@ -374,6 +374,10 @@ export class QuickTurnExtractor {
   constructor() {
     this._text = '';
     this._think = '';
+    /** [261123-finish-fix] 是否收到过 continuation_expected:true（表示还有后续步骤） */
+    this._awaitingContinuation = false;
+    /** 最后一次收到事件的时间戳，用于「后续步骤迟迟不来」的兜底判定 */
+    this._lastEventAt = 0;
     /** 当前消息已累积的正文（用于和 message_complete 的全文做差分） */
     this._curMsg = '';
     /** 已经推给客户端的正文长度（跨消息累计） */
@@ -414,6 +418,7 @@ export class QuickTurnExtractor {
     if (!evt || typeof evt !== 'object') return;
     const type = String(evt.type || '');
     this._eventCounts[type] = (this._eventCounts[type] || 0) + 1;
+    this._lastEventAt = Date.now();
     if (evt.thread_id) this._threadId = evt.thread_id;
     const p = (evt.payload && typeof evt.payload === 'object') ? evt.payload : {};
 
@@ -443,7 +448,16 @@ export class QuickTurnExtractor {
         if (Array.isArray(p.tool_calls) && p.tool_calls.length) {
           // Quick 自带工具由服务端执行，这里只记录，不进正文
         }
-        if (p.continuation_expected !== true) this._finished = true;
+        // [261123-finish-fix] continuation_expected:true 表示后面还有步骤。
+        // 但如果后续步骤因为超时/丢帧/服务端提前收尾而永远不来，
+        // 旧实现会永远停在 finished=false，客户端表现成「回复完了但一直等待」。
+        // 这里记下这个状态，由上层按「末段时间」兜底收尾。
+        if (p.continuation_expected === true) {
+          this._awaitingContinuation = true;
+        } else {
+          this._finished = true;
+          this._awaitingContinuation = false;
+        }
         break;
       }
 
@@ -510,6 +524,10 @@ export class QuickTurnExtractor {
   get text() { return this._text; }
   get think() { return this._think; }
   get finished() { return this._finished; }
+  /** 是否有「未兑现的后续步骤」 */
+  get awaitingContinuation() { return this._awaitingContinuation; }
+  /** 最后一次收到事件的时间戳 */
+  get lastEventAt() { return this._lastEventAt; }
   get error() { return this._error; }
   get usage() { return this._usage; }
   get threadId() { return this._threadId; }

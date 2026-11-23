@@ -308,13 +308,38 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
     // 同时把已用时长写进注释，方便排查「到底卡了多久」。
     const keepAliveMs = Math.max(5000, Math.round((cfg.keepAliveSec || 20) * 1000));
     const startedAt = Date.now();
-    keepAliveTimer = setInterval(() => {
+    // [261123-finish-fix] 兜底：收到 continuation_expected:true 后，
+    // 若后续步骤迟迟不来（约 20s 无任何事件），主动收尾。
+    // 否则会永远停在 finished=false，客户端表现成「回复完了但一直等待」。
+    const CONTINUATION_GRACE_MS = 20000;
+    let continuationCheckedAt = 0;
+
+    keepAliveTimer = setInterval(async () => {
       try {
         if (!res.writableEnded) {
           const el = Math.round((Date.now() - startedAt) / 1000);
           res.write(': keepalive ' + el + 's\n\n');
         }
       } catch (_) {}
+
+      // 只在「等待后续步骤」状态下检查，且每 5 秒最多判一次，避免频繁 query DOM
+      if (dispatched || aborted) return;
+      if (!extractor.awaitingContinuation) return;
+      const now = Date.now();
+      if (now - continuationCheckedAt < 5000) return;
+      continuationCheckedAt = now;
+
+      const since = now - (extractor.lastEventAt || startedAt);
+      if (since < CONTINUATION_GRACE_MS) return;
+
+      // 超过宽限期仍无新事件：先看页面是否还在生成
+      const generating = await isGenerating(conn).catch(() => false);
+      if (generating) return;   // 还在生成，交给正常的空闲超时机制
+
+      log('后续步骤未到来（' + Math.round(since / 1000) + 's 无事件，页面已停止生成），主动收尾');
+      extractor.consume({ type: 'stream_ended', payload: { message: '后续步骤超时' } });
+      flush();
+      finish().catch((e) => console.warn('[Chat] finish 异常:', e.message));
     }, keepAliveMs);
 
     // ---------- 3. 发送 ----------
