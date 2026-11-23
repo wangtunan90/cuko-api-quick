@@ -923,32 +923,32 @@ npm test
 程序会把三种解决办法直接打出来。最省事的是编辑 `data/config.json` 把 `port` 改掉再重启，
 详见[关于端口：怎么改成别的端口](#关于端口怎么改成别的端口)。
 
-**Q：日志提示「未找到 chrome.exe，请在配置方案里指定 chromePath」**
+**Q：提示「没找到 Chrome」怎么办**
 
-服务会自动探测 Chrome，顺序是：
+管理台顶部会直接弹出一个红色提示条，让你填路径 —— **按提示操作即可，不用改任何配置文件**：
 
-1. **注册表** `App Paths\chrome.exe`（最权威，能覆盖自定义安装目录）
-2. **用户级安装** `%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe`（免管理员安装常见）
-3. **系统级安装** `C:\Program Files\Google\Chrome\Application\chrome.exe`
-4. **32 位 / 旧版** `C:\Program Files (x86)\...`
-5. **Edge 兜底** `msedge.exe`（同为 Chromium 内核，CDP 参数通用）
+1. 打开管理台（服务启动时会自动打开）
+2. 如果顶部黄/红条出现「没找到 Chrome」，在输入框里填 chrome.exe 的完整路径
+3. 点 **保存并检测**，成功后提示条自动消失，就能正常添加账号了
 
-如果都探测不到（或你想指定特定版本），手动填：
+路径填到 **.exe 文件**（不是文件夹），例如：
 
-1. 先找到你的 chrome.exe，命令行运行：
+```
+C:\Program Files\Google\Chrome\Application\chrome.exe
+C:\Users\你的用户名\AppData\Local\Google\Chrome\Application\chrome.exe
+```
 
-   ```cmd
-   reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
-   ```
+不确定在哪？提示条里展开「自动探测试过这些位置」能看到服务找过哪些地方；
+也可以运行：
 
-   或者直接看 `%LOCALAPPDATA%\Google\Chrome\Application\`
+```cmd
+reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
+```
 
-2. 打开管理台 →「配置方案」→ 展开方案 → 把 **Chrome 路径** 填成完整路径
-3. 保存后重新点「打开」或「检查」
+填好的路径会存进 `data/config.json` 的 `chromePath`，**对所有账号生效**
+（包括只读的默认方案），下次启动不用再填。
 
-> 默认方案是只读的。要么新建一个方案，要么改已有的自定义方案。
-
-**Q：Chrome 起不来，日志里一堆 `--enable-logging=stderr` 的错误**
+**Q：Chrome 起不来，日志里一堆**Q：Chrome 起不来，日志里一堆 `--enable-logging=stderr` 的错误**
 
 先确认 Chrome 确实装在标准路径。装在其他位置的话，在配置方案里把 `chromePath` 填成完整路径。
 

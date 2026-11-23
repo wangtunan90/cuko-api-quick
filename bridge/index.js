@@ -105,6 +105,12 @@ const server = http.createServer(async (req, res) => {
       portSource: runtimeCfg.portSource,
       configFile: RUNTIME_CONFIG_FILE,
       version: getVersion(),
+      // [261123-chrome-ui] 把 Chrome 探测结果暴露给管理台。
+      // 探测不到时管理台要引导用户手动填写路径，而不是等添加账号失败才报错。
+      chrome: (() => {
+        const p = resolveChromePath(DEFAULT_PROFILE_VALUES);
+        return { found: !!p, path: p || null };
+      })(),
     });
     return;
   }
@@ -319,6 +325,50 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, record);
     } catch (e) {
       sendJson(res, 500, { modelId, state: 'error', message: e.message, checkedAt: Date.now() });
+    }
+    return;
+  }
+
+  // [261123-chrome-ui] 探测系统里的 Chrome 并返回候选路径，供管理台引导用户。
+  if (req.method === 'GET' && pathname === '/api/chrome/detect') {
+    const found = resolveChromePath(DEFAULT_PROFILE_VALUES);
+    let candidates = [];
+    try {
+      // 让用户看到「试过哪些位置」，找不着时也能照着填
+      const { chromeCandidatesForUi } = await import('./chrome.js');
+      candidates = chromeCandidatesForUi();
+    } catch (_) {}
+    sendJson(res, 200, {
+      found: !!found,
+      path: found || null,
+      candidates: candidates.map((p) => ({ path: p, exists: fs.existsSync(p) })),
+    });
+    return;
+  }
+
+  // [261123-chrome-ui] 保存用户手填的 Chrome 路径。
+  // 不绑到某个配置方案，而是直接写进 data/config.json 的 chromePath 覆盖项，
+  // 这样「默认方案」也能生效（默认方案本身是只读的，不能改它的 values）。
+  if (req.method === 'POST' && pathname === '/api/chrome/path') {
+    let data;
+    try {
+      const body = await readBody(req);
+      data = JSON.parse(body || '{}');
+    } catch { sendJson(res, 400, { error: 'Bad JSON' }); return; }
+
+    const p = String(data.path || '').trim();
+    if (!p) { sendJson(res, 400, { error: '请填写完整路径' }); return; }
+    if (!fs.existsSync(p)) { sendJson(res, 400, { error: '文件不存在：' + p }); return; }
+    if (!/\.exe$/i.test(p)) { sendJson(res, 400, { error: '请填到 .exe 可执行文件（不是文件夹）' }); return; }
+
+    try {
+      const cur = JSON.parse(fs.existsSync(RUNTIME_CONFIG_FILE) ? fs.readFileSync(RUNTIME_CONFIG_FILE, 'utf8') : '{}');
+      cur.chromePath = p;
+      fs.writeFileSync(RUNTIME_CONFIG_FILE, JSON.stringify(cur, null, 2), 'utf8');
+      console.log('[Chrome] 用户指定路径已保存:', p);
+      sendJson(res, 200, { ok: true, path: p });
+    } catch (e) {
+      sendJson(res, 500, { error: '保存失败: ' + e.message });
     }
     return;
   }

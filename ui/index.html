@@ -71,6 +71,36 @@
 </header>
 
 <main>
+  <section id="chromeAlert" style="display:none">
+    <div class="card" style="border-color:var(--err);background:rgba(224,82,82,.06)">
+      <div style="display:flex;align-items:flex-start;gap:12px">
+        <div style="font-size:20px;line-height:1.2">⚠️</div>
+        <div style="flex:1">
+          <div style="font-weight:600;margin-bottom:6px">没找到 Chrome，添加账号会失败</div>
+          <div class="hint" style="margin:0 0 10px">
+            自动探测没找到 chrome.exe。请手动填写它的完整路径（填到 <code>.exe</code>，不是文件夹）。
+          </div>
+          <div class="row">
+            <div style="flex:1;min-width:320px">
+              <label>Chrome 可执行文件路径</label>
+              <input id="chromePathInput" placeholder="C:\Program Files\Google\Chrome\Application\chrome.exe" style="width:100%">
+            </div>
+            <button onclick="saveChromePath()">保存并检测</button>
+            <button class="ghost" onclick="redetectChrome()">重新检测</button>
+          </div>
+          <details style="margin-top:10px">
+            <summary>自动探测试过这些位置</summary>
+            <div id="chromeCandidates" class="hint" style="margin-top:6px;font-family:monospace;font-size:12px;line-height:1.8"></div>
+          </details>
+          <div class="hint" style="margin-top:8px">
+            找不到？在文件资源管理器地址栏输入 <code>%LOCALAPPDATA%\Google\Chrome\Application</code> 看看有没有 chrome.exe。
+            也可以运行 <code>reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"</code> 查。
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section>
     <h2>账号（每个账号 = 一个模型 = 一个独立 Chrome）</h2>
     <div class="card">
@@ -283,6 +313,49 @@ async function delProfile(id) {
   catch (e) { toast(e.message, 'err'); }
 }
 
+// ---------- Chrome 检测 ----------
+async function checkChrome() {
+  try {
+    const r = await api('GET', '/api/chrome/detect');
+    const box = document.getElementById('chromeAlert');
+    if (r.found) {
+      box.style.display = 'none';
+      return true;
+    }
+    box.style.display = '';
+    document.getElementById('chromePathInput').value = '';
+    // 展示试过的位置，方便用户判断该填什么
+    const list = (r.candidates || []);
+    document.getElementById('chromeCandidates').innerHTML = list.length
+      ? list.map(c => (c.exists ? '✅ ' : '✗ ') + esc(c.path)).join('<br>')
+      : '(无)';
+    return false;
+  } catch (e) {
+    console.warn('Chrome 检测失败:', e.message);
+    return true;   // 接口异常时不打扰用户
+  }
+}
+
+async function saveChromePath() {
+  const input = document.getElementById('chromePathInput');
+  const p = input.value.trim();
+  if (!p) return toast('请填写完整路径', 'err');
+  if (!/\.exe$/i.test(p)) return toast('请填到 .exe 文件（不是文件夹）', 'err');
+  try {
+    await api('POST', '/api/chrome/path', { path: p });
+    toast('已保存，正在重新检测…', 'ok');
+    const ok = await checkChrome();
+    if (ok) toast('Chrome 已就绪，可以添加账号了', 'ok');
+    else toast('仍然找不到，请确认路径正确', 'err');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function redetectChrome() {
+  toast('重新检测中…');
+  const ok = await checkChrome();
+  toast(ok ? 'Chrome 已就绪' : '仍未找到 Chrome', ok ? 'ok' : 'err');
+}
+
 // ---------- 初始化 ----------
 $('#endpoint').textContent = API;
 $('#ep2').textContent = API;
@@ -310,6 +383,7 @@ $('#curlSample').textContent = [
 
 loadProfiles();
 loadAccounts();
+checkChrome();          // 启动即检查，没装就提示填路径
 setInterval(loadAccounts, 8000);
 </script>
 </body>

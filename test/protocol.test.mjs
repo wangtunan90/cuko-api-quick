@@ -436,3 +436,14 @@ test('resolveChromePath：配置了有效路径时优先采用', () => {
   if (!real) return;   // 本机没装则跳过
   assert.equal(resolveChromePath({ chromePath: real }), real);
 });
+
+// ============ Chrome 路径用户配置 ============
+test('chromeCandidatesForUi 返回去重后的候选列表', async () => {
+  const { chromeCandidatesForUi } = await import('../bridge/chrome.js');
+  const list = chromeCandidatesForUi();
+  assert.ok(Array.isArray(list));
+  assert.ok(list.length > 0, '至少要有候选路径');
+  const uniq = new Set(list);
+  assert.equal(uniq.size, list.length, '候选列表应已去重');
+  assert.ok(list.every((p) => typeof p === 'string' && p.toLowerCase().endsWith('.exe')));
+});

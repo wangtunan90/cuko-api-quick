@@ -42,7 +42,17 @@ function chromeCandidates() {
   if (env.ProgramFiles) {
     out.push(path.join(env.ProgramFiles, 'Microsoft', 'Edge', 'Application', 'msedge.exe'));
   }
-  return out;
+
+  // 去重（%ProgramFiles% 展开后可能与写死路径重复）
+  return [...new Set(out)];
+}
+
+/**
+ * 导出候选路径列表，供管理台展示「试过哪些位置」。
+ * [261123-chrome-ui] 探测失败时用户看到这个列表，能直接判断自己该填什么。
+ */
+export function chromeCandidatesForUi() {
+  return chromeCandidates();
 }
 
 /** 从注册表 App Paths 里读 Chrome 路径（最权威，能覆盖自定义安装目录） */
@@ -70,10 +80,23 @@ function chromeFromRegistry() {
  * @returns {string|null}
  */
 export function resolveChromePath(cfg) {
+  // [261123-chrome-ui] 优先级最高：用户在管理台手填、存在 data/config.json 里的路径。
+  // 这一项对所有账号生效（包括只读的默认方案），所以放在方案配置之前。
+  try {
+    const raw = fs.existsSync(RUNTIME_CONFIG_FILE)
+      ? JSON.parse(fs.readFileSync(RUNTIME_CONFIG_FILE, 'utf8'))
+      : null;
+    const userPath = raw && typeof raw.chromePath === 'string' ? raw.chromePath.trim() : '';
+    if (userPath) {
+      if (fs.existsSync(userPath)) return userPath;
+      console.warn('[Chrome] data/config.json 里的 chromePath 不存在：' + userPath);
+    }
+  } catch (_) {}
+
   const configured = String((cfg && cfg.chromePath) || '').trim();
   if (configured) {
     if (fs.existsSync(configured)) return configured;
-    console.warn('[Chrome] 配置里的 chromePath 不存在：' + configured);
+    console.warn('[Chrome] 配置方案里的 chromePath 不存在：' + configured);
   }
 
   // 注册表优先（能覆盖自定义安装目录）
