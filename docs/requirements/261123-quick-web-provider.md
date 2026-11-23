@@ -392,6 +392,35 @@ UI 在真实浏览器验证：提示条显示/隐藏正常、保存错误路径�
 
 单测增至 58 项全过。
 
+### 261123-newchat-ready：第一次对话（系统提示词）经常发失败
+
+**现象**：用户反馈每次新对话的第一条消息发不出去，尤其是带系统提示词的长消息。
+
+**根因**：`startNewChat` 点完「新对话」按钮后，用
+`waitForComposer()`（等输入框出现）判断就绪。但实测点击前后：
+
+```
+点击前: ta=true  (textarea 一直在)
+t+0.3s: ta=true  bodyLen=626  msgCount=1   ← 已切空对话
+t+1.8s: ta=true  bodyLen=726              ← 页面才真正重渲染完
+```
+
+**输入框从头到尾都存在**，所以这个判据永远立即返回 true ——
+页面还在重渲染就发消息，React 状态没重置完，第一条容易失败。
+
+**修法**：
+- 新增 `NEW_CHAT_READY_EXPR`：同时检查「URL 无 conversationId +
+  输入框为空 + 未在生成」三项
+- 新增 `waitForNewChatReady()`：轮询该判定，**连续两次就绪**再算稳定，
+  并额外静置 `newChatSettleSec` 秒
+- 新增 `isAlreadyFreshChat()`：本来就在干净新对话里时**跳过重建**，避免白等
+- 新增配置项 `newChatWaitSec`（默认 30）、`newChatSettleSec`（默认 3）
+
+**验收**：连续 3 次新对话全部成功（7.8s / 13.1s / 14.7s）。
+日志可见两条路径都正常：
+`[Send] 已经在新对话里，跳过重建` 与 `[Send] 新对话已就绪（等待 3.1s）`。
+单测增至 61 项全过。
+
 ## 遗留
 
 - **文件/图片输入**：Quick 的附件走独立的 `upload-attachment` → DLP 扫描 → `files/upload` 流程，

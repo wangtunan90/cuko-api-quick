@@ -28,6 +28,21 @@ export const DEFAULT_PROFILE_VALUES = Object.freeze({
   /** 等待页面输入框出现的最长秒数 */
   pageReadyPollMaxSec: 25,
   /**
+   * 点「新对话」后，最长等多久算超时（秒）。
+   *
+   * [261123-newchat-ready] 注意这和 pageReadyPollMaxSec 不是一回事：
+   * 输入框在页面上一直存在，光看它无法判断「新对话是否真的重置好了」。
+   * 这里等的是「URL 里的 conversationId 清掉 + 输入框清空 + 不在生成中」。
+   */
+  newChatWaitSec: 30,
+  /**
+   * 判定新对话就绪后，再额外静置多久（秒）。
+   *
+   * 给 React 留时间把状态彻底重置。第一次对话（尤其带系统提示词的长消息）
+   * 如果发得太早容易失败 —— 调大这个值可以缓解。
+   */
+  newChatSettleSec: 3,
+  /**
    * 单次请求流式接收的最长秒数，超时强制结束。
    * Quick 的 agent 首轮要跑 30~90s，长任务更久，因此默认给到 900s；
    * 真正的卡死判定由 index.js 的空闲超时负责，这里只兜「永不结束」。
@@ -72,6 +87,8 @@ export const FIELD_LABELS = Object.freeze({
   targetUrl: '启动页面 URL（/sn/start 会自动跳到聊天页）',
   connectPollMaxSec: 'CDP 端口就绪超时（秒）',
   pageReadyPollMaxSec: '页面就绪超时（秒）',
+  newChatWaitSec: '新对话等待超时（秒）',
+  newChatSettleSec: '新对话就绪后静置（秒）',
   keepAliveSec: 'SSE 心跳间隔（秒）',
   idleTimeoutSec: '空闲超时（秒，无任何事件才算卡死）',
   requestTimeoutSec: '请求总超时（秒）',
@@ -88,6 +105,7 @@ export const FIELD_LABELS = Object.freeze({
 /** 数值型字段列表（校验用） */
 const NUMBER_FIELDS = [
   'connectPollMaxSec', 'pageReadyPollMaxSec', 'requestTimeoutSec',
+  'newChatWaitSec', 'newChatSettleSec',
   'keepAliveSec', 'idleTimeoutSec',
   'wsConnectTimeoutSec', 'wsAckTimeoutSec',
   'textPasteWaitMinSec', 'textPasteWaitMaxSec',

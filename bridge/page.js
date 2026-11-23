@@ -354,3 +354,117 @@ export function isThreadAcceptable(evtThread, expected) {
   if (isBranchSessionId(evtThread)) return { ok: true, reason: 'branch' };
   return { ok: false, reason: 'mismatch' };
 }
+
+/**
+ * 「新对话真的就绪」的判定
+ *
+ * [261123-newchat-ready] 为什么不能用「输入框存在」来判断：
+ * 实测点击「新对话」按钮后，textarea 从头到尾都在（ta 恒为 true），
+ * 用它做就绪判定等于永远立即返回 —— 而页面其实还在重渲染，
+ * React 状态没重置完就发消息，第一条（尤其是带系统提示词的长消息）容易发不出去。
+ *
+ * 实测到的真实变化：
+ *   t+0.0s  bodyLen=633  msgCount=19   ← 旧对话里
+ *   t+0.3s  bodyLen=626  msgCount=1    ← 已切到空对话（消息清空）
+ *   t+1.8s  bodyLen=726                ← 页面完成重渲染（欢迎语/建议卡片出现）
+ *
+ * 所以判定用「URL 无 conversationId + 消息区已清空 + 没有生成中」这几项组合。
+ */
+export const NEW_CHAT_READY_EXPR = `(() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4) return false;
+    const s = getComputedStyle(el);
+    return s.visibility !== 'hidden' && s.display !== 'none';
+  };
+
+  // 1) URL 里不应该再有 conversationId（点了新对话就该清掉）
+  const hasConv = /[?&]conversationId=/.test(location.href);
+
+  // 2) 输入框必须存在且可用
+  const sels = ['textarea[placeholder*="提问"]', 'textarea[placeholder*="键入"]', 'textarea'];
+  let ta = null;
+  for (const sel of sels) {
+    const nodes = Array.from(document.querySelectorAll(sel)).filter(visible);
+    if (nodes.length) { ta = nodes[nodes.length - 1]; break; }
+  }
+  const hasTa = !!ta && !ta.disabled && !ta.readOnly;
+
+  // 3) 输入框必须是空的（新对话不该残留内容）
+  const taEmpty = ta ? String(ta.value || '').trim().length === 0 : false;
+
+  // 4) 不应该还在生成中（停止按钮存在 = 还在跑）
+  const generating = Array.from(document.querySelectorAll('button'))
+    .some(b => {
+      const a = (b.getAttribute('aria-label') || '');
+      return visible(b) && (a.includes('停止') || /stop/i.test(a));
+    });
+
+  // 5) 消息区应该已清空（用正文长度 + 是否有「助手」气泡双重判断）
+  //    这里不追求精确，只要能区分「旧对话残留」和「空对话」即可。
+  const bodyLen = (document.body.innerText || '').length;
+
+  return {
+    ready: !hasConv && hasTa && taEmpty && !generating,
+    hasConv, hasTa, taEmpty, generating, bodyLen,
+    url: location.href,
+  };
+})()`;
+
+/**
+ * 等「新对话真正就绪」。
+ * @param {object} conn CDP 连接
+ * @param {number} maxSec 最长等待秒数
+ * @param {object} [opts]
+ * @param {number} [opts.settleMs] 判定就绪后再额外静置多久（默认 800ms）
+ * @param {(msg:string)=>void} [opts.log]
+ * @returns {Promise<{ok:boolean, waitedMs:number, last?:object}>}
+ */
+export async function waitForNewChatReady(conn, maxSec, opts = {}) {
+  const log = opts.log || (() => {});
+  const settleMs = opts.settleMs == null ? 800 : opts.settleMs;
+  const deadline = Date.now() + Math.max(1, maxSec) * 1000;
+  const started = Date.now();
+  let last = null;
+  let okSince = 0;
+  let firstSample = null;
+
+  while (Date.now() < deadline) {
+    try {
+      const r = await conn.Runtime.evaluate({ expression: NEW_CHAT_READY_EXPR, returnByValue: true });
+      last = (r && r.result && r.result.value) || null;
+      if (!firstSample) firstSample = last;
+      if (last && last.ready) {
+        // 连续两次判定就绪再算稳定，避免抓到重渲染的中间态
+        if (!okSince) {
+          okSince = Date.now();
+        } else if (Date.now() - okSince >= settleMs) {
+          return { ok: true, waitedMs: Date.now() - started, last };
+        }
+      } else {
+        okSince = 0;
+      }
+    } catch (_) {
+      // 导航/重渲染期间 evaluate 可能失败，属预期，继续等
+      okSince = 0;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return { ok: false, waitedMs: Date.now() - started, last };
+}
+
+/**
+ * 快速判断：当前是否已经在「干净的新对话」里（无需点击/等待）。
+ * @param {object} conn CDP 连接
+ * @returns {Promise<boolean>}
+ */
+export async function isAlreadyFreshChat(conn) {
+  try {
+    const r = await conn.Runtime.evaluate({ expression: NEW_CHAT_READY_EXPR, returnByValue: true });
+    const v = (r && r.result && r.result.value) || null;
+    return !!(v && v.ready && !v.hasConv && v.taEmpty);
+  } catch (_) {
+    return false;
+  }
+}

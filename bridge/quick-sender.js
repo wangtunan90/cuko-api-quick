@@ -14,7 +14,7 @@ import {
   READ_COMPOSER_EXPR, FOCUS_COMPOSER_EXPR, IS_GENERATING_EXPR,
   SEND_BUTTON_STATE_EXPR, DUMP_STATE_EXPR, NEW_CHAT_EXPR,
   parseQuickUrl, buildConversationUrl, isOnConversation,
-  detectAccountId, buildChatUrl,
+  detectAccountId, buildChatUrl, waitForNewChatReady, isAlreadyFreshChat,
 } from './page.js';
 
 /** 读输入区状态 */
@@ -320,17 +320,38 @@ export async function sendUserMessage(conn, text, cfg, opts = {}) {
 
 /** 回到「新对话」 */
 export async function startNewChat(conn, cfg) {
+  // [261123-newchat-ready] 优化：如果当前已经在一个干净的新对话里
+  // （URL 无 conversationId、输入框空、未在生成），就不必再点一次按钮、
+  // 也不必死等 settle —— 直接返回，避免每轮白白多花几秒。
+  if (await isAlreadyFreshChat(conn)) {
+    console.log('[Send] 已经在新对话里，跳过重建');
+    return true;
+  }
+
   // 1) 首选：点页面自己的「新对话」按钮（最贴近真实用户操作）
   try {
     const r = await conn.Runtime.evaluate({ expression: NEW_CHAT_EXPR, returnByValue: true });
     const v = (r && r.result && r.result.value) || {};
     if (v.ok) {
       console.log('[Send] 已点击新对话按钮');
-      await new Promise(res => setTimeout(res, 1200));
-      // 点完之后必须确认真的到了聊天页，否则继续走兜底
-      const st = await waitForComposer(conn, 10);
-      if (st) return true;
-      console.warn('[Send] 点了新对话但输入区没出来，改用 URL 兜底');
+      // [261123-newchat-ready] 旧实现是「等 1.2s + 等输入框出现」，但输入框从头到尾
+      // 都在，这个判据等于永远立即返回 —— 页面还在重渲染就发消息，
+      // 第一条（尤其带系统提示词的长消息）容易发不出去。
+      // 改成等「URL 无 conversationId + 输入框空 + 未在生成」三项同时成立，
+      // 并额外静置 settle 时间，确保 React 状态真的重置完。
+      const settleSec = Number(
+        (cfg && (cfg.newChatSettleSec != null ? cfg.newChatSettleSec : cfg.pageReadyPollMaxSec)) || 3,
+      );
+      const maxWait = Math.max(settleSec, Math.ceil((cfg && cfg.newChatWaitSec) || 30));
+      const r2 = await waitForNewChatReady(conn, maxWait, {
+        settleMs: Math.max(0, Math.round(settleSec * 1000)),
+        log: (m) => console.log('[Send] ' + m),
+      });
+      if (r2.ok) {
+        console.log('[Send] 新对话已就绪（等待 ' + (r2.waitedMs / 1000).toFixed(1) + 's）');
+        return true;
+      }
+      console.warn('[Send] 新对话未在 ' + maxWait + 's 内就绪，最后状态: ' + JSON.stringify(r2.last));
     }
   } catch (_) {}
 

@@ -15,6 +15,7 @@ import {
 import { parseQuickUrl, buildConversationUrl, isOnConversation, extractThreadIdFromUrl, buildChatUrl, isMainSessionId, isBranchSessionId, isThreadAcceptable } from '../bridge/page.js';
 import { DEFAULT_PROFILE_VALUES, validateProfile } from '../bridge/default-config.js';
 import { DEFAULT_RUNTIME_CONFIG } from '../bridge/runtime-config.js';
+import { NEW_CHAT_READY_EXPR, waitForNewChatReady, isAlreadyFreshChat } from '../bridge/page.js';
 import { getVersion } from '../bridge/version.js';
 import { resolveChromePath } from '../bridge/chrome.js';
 import { splitOversizedTexts, materializeFileItems, TEXT_TO_FILE_THRESHOLD, safeFileName, cleanupAttachments } from '../bridge/attachments.js';
@@ -455,4 +456,26 @@ test('默认方案包含全部可配字段（供账号回退使用）', () => {
   assert.ok(keys.includes('chromePath'));
   assert.ok(keys.includes('idleTimeoutSec'));
   assert.ok(keys.includes('keepAliveSec'));
+});
+
+// ============ 新对话就绪判定 ============
+test('新对话配置项存在且合理', () => {
+  assert.ok(typeof DEFAULT_PROFILE_VALUES.newChatWaitSec === 'number');
+  assert.ok(typeof DEFAULT_PROFILE_VALUES.newChatSettleSec === 'number');
+  assert.ok(DEFAULT_PROFILE_VALUES.newChatWaitSec >= 5, '等待超时应留有余量');
+  assert.ok(DEFAULT_PROFILE_VALUES.newChatSettleSec >= 0);
+});
+
+test('新对话判定表达式包含关键条件（不能只看输入框存在）', () => {
+  // 实测：点新对话前后 textarea 一直存在，只看它会永远立即返回 true。
+  // 所以判定必须同时检查 conversationId / 输入框为空 / 是否在生成。
+  assert.ok(NEW_CHAT_READY_EXPR.includes('conversationId'), '应检查 URL 里的 conversationId');
+  assert.ok(NEW_CHAT_READY_EXPR.includes('taEmpty') || NEW_CHAT_READY_EXPR.includes('value'),
+    '应检查输入框是否为空');
+  assert.ok(NEW_CHAT_READY_EXPR.includes('generating'), '应检查是否仍在生成');
+});
+
+test('waitForNewChatReady / isAlreadyFreshChat 是函数', () => {
+  assert.equal(typeof waitForNewChatReady, 'function');
+  assert.equal(typeof isAlreadyFreshChat, 'function');
 });
