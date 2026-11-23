@@ -421,6 +421,29 @@ t+1.8s: ta=true  bodyLen=726              ← 页面才真正重渲染完
 `[Send] 已经在新对话里，跳过重建` 与 `[Send] 新对话已就绪（等待 3.1s）`。
 单测增至 61 项全过。
 
+### 261123-keepalive-fix：长回复永远不结束（keepalive 续命）
+
+**现象**：回复内容已经完整输出（以 `</sources>` 结尾），但之后只有
+`: keepalive 260s / 280s / ... / 400s`，永远收不到 `event: done`。
+
+**根因**：Quick 自己每 20~30 秒下发 `keepalive` 帧保活。
+上一版为了让长任务不被误判，改成了「每收到一个事件就 resetIdle()」——
+结果 keepalive 把空闲计时器无限续命。一旦 `message_complete` 丢失，
+就永远等不到超时。这条路径与用户日志完全吻合。
+
+**修法**：
+- `chat.js`：只有「实质内容」事件才 `resetIdle()`；
+  keepalive / status / runs_updated / task_list_update / title_generated 等不算
+- `quick-protocol.js`：extractor 新增 `lastContentAt`，
+  与 `lastEventAt`（任意事件）区分开
+- 新增卡死兜底：**已有内容 + 90s 无实质进展 + 页面已停止生成** → 主动收尾
+
+**验收**：
+- 模拟用户场景（t=0 有内容、之后只有 keepalive、页面 5s 后停止生成）：
+  旧逻辑永不收尾，新逻辑 **100s 收尾**
+- 真机：同一 branch 会话跑长回复，124.6s / 14698 字，正常收到 done
+- 单测增至 64 项全过
+
 ## 遗留
 
 - **文件/图片输入**：Quick 的附件走独立的 `upload-attachment` → DLP 扫描 → `files/upload` 流程，

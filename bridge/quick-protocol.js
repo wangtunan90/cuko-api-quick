@@ -376,8 +376,14 @@ export class QuickTurnExtractor {
     this._think = '';
     /** [261123-finish-fix] 是否收到过 continuation_expected:true（表示还有后续步骤） */
     this._awaitingContinuation = false;
-    /** 最后一次收到事件的时间戳，用于「后续步骤迟迟不来」的兜底判定 */
+    /** 最后一次收到事件的时间戳 */
     this._lastEventAt = 0;
+    /**
+     * [261123-keepalive-fix] 最后一次收到「实质内容」事件的时间戳。
+     * 不包含 keepalive / status / runs_updated 这类噪音 —— Quick 每 20~30 秒
+     * 会下发 keepalive 保活，如果拿「任意事件」判卡死，计时器会被无限续命。
+     */
+    this._lastContentAt = 0;
     /** 当前消息已累积的正文（用于和 message_complete 的全文做差分） */
     this._curMsg = '';
     /** 已经推给客户端的正文长度（跨消息累计） */
@@ -419,6 +425,11 @@ export class QuickTurnExtractor {
     const type = String(evt.type || '');
     this._eventCounts[type] = (this._eventCounts[type] || 0) + 1;
     this._lastEventAt = Date.now();
+    // 只有真正推进内容的事件才算「有进展」
+    const NOISE = new Set(['keepalive', 'status', 'runs_updated', 'task_list_update',
+      'migrationStatus', 'federate_auth_status', 'flows_list_submitted_drafts_result',
+      'title_generated', 'message_sources']);
+    if (!NOISE.has(type)) this._lastContentAt = this._lastEventAt;
     if (evt.thread_id) this._threadId = evt.thread_id;
     const p = (evt.payload && typeof evt.payload === 'object') ? evt.payload : {};
 
@@ -539,6 +550,8 @@ export class QuickTurnExtractor {
   get awaitingContinuation() { return this._awaitingContinuation; }
   /** 最后一次收到事件的时间戳 */
   get lastEventAt() { return this._lastEventAt; }
+  /** 最后一次收到「实质内容」事件的时间戳（不含 keepalive 等噪音） */
+  get lastContentAt() { return this._lastContentAt; }
   get error() { return this._error; }
   get usage() { return this._usage; }
   get threadId() { return this._threadId; }

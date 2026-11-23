@@ -479,3 +479,35 @@ test('waitForNewChatReady / isAlreadyFreshChat 是函数', () => {
   assert.equal(typeof waitForNewChatReady, 'function');
   assert.equal(typeof isAlreadyFreshChat, 'function');
 });
+
+// ============ keepalive 不能无限续命 ============
+test('keepalive 会更新 lastEventAt，但不更新 lastContentAt', async () => {
+  const ex = new QuickTurnExtractor();
+  ex.consume({ type: 'text_delta', payload: { delta: '内容' } });
+  const tContent = ex.lastContentAt;
+  assert.ok(tContent > 0);
+  await new Promise((r) => setTimeout(r, 30));
+  ex.consume({ type: 'keepalive', payload: {} });
+  assert.ok(ex.lastEventAt >= tContent, 'lastEventAt 应更新');
+  assert.equal(ex.lastContentAt, tContent, 'lastContentAt 不应被 keepalive 刷新');
+});
+
+test('status / runs_updated / task_list_update 也不应刷新 lastContentAt', async () => {
+  const ex = new QuickTurnExtractor();
+  ex.consume({ type: 'text_delta', payload: { delta: 'x' } });
+  const t0 = ex.lastContentAt;
+  await new Promise((r) => setTimeout(r, 30));
+  for (const t of ['status', 'runs_updated', 'task_list_update', 'migrationStatus', 'title_generated']) {
+    ex.consume({ type: t, payload: {} });
+  }
+  assert.equal(ex.lastContentAt, t0, '噪音事件不应刷新内容时间');
+});
+
+test('真实内容事件会刷新 lastContentAt', async () => {
+  const ex = new QuickTurnExtractor();
+  ex.consume({ type: 'text_delta', payload: { delta: 'a' } });
+  const t0 = ex.lastContentAt;
+  await new Promise((r) => setTimeout(r, 30));
+  ex.consume({ type: 'text_delta', payload: { delta: 'b' } });
+  assert.ok(ex.lastContentAt > t0, '新内容应刷新时间');
+});

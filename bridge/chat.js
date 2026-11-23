@@ -48,6 +48,10 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
   let keepAliveTimer = null;
   let firstEventSeen = false;
   let branchLoggedOnce = false;
+  // [261123-keepalive-fix] 卡死兜底：连续无实质内容 + 页面已停止生成 → 主动收尾
+  const STALL_GRACE_MS = 90000;
+  let lastContentAt = 0;
+  let stallSinceContent = false;
   // [261123-finish-fix] 结束前的延迟确认定时器
   let finishTimer = null;
   const FINISH_GRACE_MS = 3000;
@@ -273,7 +277,26 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
         // 结果从首帧算起 120s 一到就无条件判超时 —— 哪怕页面一直在正常输出。
         // 长思考、长回复、agent 多步任务、附件解析慢，全都会撞上这个误报。
         firstEventSeen = true;
-        resetIdle();
+        // [261123-keepalive-fix] 关键修复：keepalive 事件不能重置空闲计时器。
+        //
+        // Quick 自己会每 20~30 秒下发一个 {"type":"keepalive"} 帧来保活。
+        // 如果把它当成「有内容进展」去 resetIdle，空闲计时器会被无限续命 ——
+        // 一旦 message_complete 丢失（实测偶发），请求就永远不结束，
+        // 客户端只能看着一串 ": keepalive 260s/280s/..." 干等。
+        //
+        // 所以只有「真的推进了内容」的事件才重置计时器；
+        // keepalive / status / runs_updated / task_list_update 这类噪音不算。
+        const evtType = String(evt.type || '');
+        const isNoise = evtType === 'keepalive' || evtType === 'status'
+          || evtType === 'runs_updated' || evtType === 'task_list_update'
+          || evtType === 'migrationStatus' || evtType === 'federate_auth_status'
+          || evtType === 'flows_list_submitted_drafts_result'
+          || evtType === 'title_generated' || evtType === 'message_sources';
+        if (!isNoise) {
+          resetIdle();
+          lastContentAt = Date.now();
+          stallSinceContent = true;
+        }
         // 续接时校验事件是否属于目标会话。
         //
         // [261123-branch-fix] 注意：用户在页面上「编辑消息 / 重新生成」时，
@@ -368,22 +391,33 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
         }
       } catch (_) {}
 
-      // 只在「等待后续步骤」状态下检查，且每 5 秒最多判一次，避免频繁 query DOM
+      // [261123-keepalive-fix] 保活兜底：即使 message_complete 丢了，也不能无限等。
+      //
+      // 触发条件（同时满足）：
+      //   1. 已经有内容输出过（曾经收到过真实的 text_delta / thinking_delta 等）
+      //   2. 距离「最后一次实质内容事件」超过 STALL_GRACE_MS
+      //   3. 页面已经不在生成（停止按钮消失）
+      //
+      // 三者同时成立说明 Quick 那边已经写完了，只是结束帧没到 —— 主动收尾。
       if (dispatched || aborted) return;
-      if (!extractor.awaitingContinuation) return;
       const now = Date.now();
       if (now - continuationCheckedAt < 5000) return;
       continuationCheckedAt = now;
 
-      const since = now - (extractor.lastEventAt || startedAt);
-      if (since < CONTINUATION_GRACE_MS) return;
+      // 记录最后一次「实质内容」事件的时间（不含 keepalive 噪音）
+      if (!stallSinceContent) return;      // 还没收到过任何真实内容，不判
 
-      // 超过宽限期仍无新事件：先看页面是否还在生成
-      const generating = await isGenerating(conn).catch(() => false);
-      if (generating) return;   // 还在生成，交给正常的空闲超时机制
+      const sinceContent = now - lastContentAt;
+      if (sinceContent < STALL_GRACE_MS) return;
 
-      log('后续步骤未到来（' + Math.round(since / 1000) + 's 无事件，页面已停止生成），主动收尾');
-      extractor.consume({ type: 'stream_ended', payload: { message: '后续步骤超时' } });
+      const generating = await isGenerating(conn).catch(() => true);
+      if (generating) {
+        log('已 ' + Math.round(sinceContent / 1000) + 's 无实质内容，但页面仍在生成，继续等待…');
+        return;
+      }
+
+      log('检测到卡死：' + Math.round(sinceContent / 1000) + 's 无实质内容且页面已停止生成（message_complete 可能丢失），主动收尾');
+      extractor.consume({ type: 'stream_ended', payload: { message: '长时间无实质进展，已主动收尾' } });
       flush();
       finish().catch((e) => console.warn('[Chat] finish 异常:', e.message));
     }, keepAliveMs);
