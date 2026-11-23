@@ -1,6 +1,6 @@
 {
   "name": "cuko-api-quick",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Stateful provider that controls Chrome via CDP to expose Amazon Quick (quick.aws.com) web chat as a Cuko-compatible API",
   "type": "module",
   "scripts": {
