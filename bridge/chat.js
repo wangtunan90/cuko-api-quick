@@ -157,8 +157,8 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
     if (!realSessionId) {
       const url = await currentUrl(conn).catch(() => '');
       const tid = extractThreadIdFromUrl(url);
-      // URL 里的 conversationId 才是稳定的主会话 ID，branch-* 不用
-      if (tid && !isBranchSessionId(tid)) {
+      // [261123-branch-resume] branch-* 同样可作为会话句柄
+      if (tid) {
         realSessionId = tid;
         log('从页面 URL 提取到 thread id:', tid);
         pushSessionIdIfNeeded();
@@ -247,14 +247,10 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
       // 旧实现只在「新建」时动页面，续接时直接用页面当前停留的会话发消息，
       // 导致客户端传了 A 的 providerSessionId、消息却发进了 B，上下文串台。
       const wantId = String(payload.providerSessionId);
-      // [261123-branch-fix] 客户端如果存下了 branch-*，说明上次拿到的是临时分支，
-      // 这种 ID 无法用来构造会话 URL，直接给出可操作的提示。
-      if (isBranchSessionId(wantId)) {
-        throw new Error(
-          '会话 ID 是临时分支（' + wantId + '），无法续接。' +
-          '这通常是因为上次回复时你在页面上编辑/重新生成了消息。请让客户端新建对话。',
-        );
-      }
+      // [261123-branch-resume] branch-* 也可以正常续接。
+      // 实测结论：把 ?conversationId=branch-498dd9e9 直接导航，服务端会加载出
+      // 完整的同一会话内容；在该 URL 下发消息，事件的 thread_id 仍然是 branch-*，
+      // 且能正常完成。所以分支是「同一会话的一个可寻址视图」，可以当会话句柄用。
       const nav = await gotoConversation(conn, wantId, cfg);
       if (!nav.ok) {
         throw new Error('续接失败：' + nav.error + '。如果你切换过 Quick 账号或清空过登录态，请新建对话。');
@@ -297,9 +293,9 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
           log('检测到临时分支会话 ' + evtThread + '（页面上编辑/重新生成产生），按同会话处理');
         }
         extractor.consume(evt);
-        // [261123-branch-fix] 不要把 branch-* 当作 providerSessionId 回传给客户端 ——
-        // 那是临时分支，下次续接时用它构造 URL 会失效。
-        if (!realSessionId && extractor.threadId && !isBranchSessionId(extractor.threadId)) {
+        // [261123-branch-resume] branch-* 现在可以正常续接，所以允许回传给客户端。
+        // （此前为了保守起见屏蔽了它，导致客户端拿不到任何句柄。）
+        if (!realSessionId && extractor.threadId) {
           realSessionId = extractor.threadId;
           log('从事件中拿到 thread id:', realSessionId);
           pushSessionIdIfNeeded();

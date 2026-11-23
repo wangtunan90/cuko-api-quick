@@ -352,6 +352,10 @@ test('临时分支应按同会话接受，不报「会话不一致」', () => {
   assert.equal(isThreadAcceptable(BRANCH_SID, MAIN_SID).reason, 'branch');
 });
 
+test('branch 自己续接自己也应被接受', () => {
+  assert.equal(isThreadAcceptable(BRANCH_SID, BRANCH_SID).ok, true);
+});
+
 test('完全相同自然接受', () => {
   assert.equal(isThreadAcceptable(MAIN_SID, MAIN_SID).ok, true);
 });

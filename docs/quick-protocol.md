@@ -236,8 +236,14 @@ Quick 的下行帧里有 `keepalive` 事件（`{"type":"keepalive","ts":...}`）
 - 下行事件的 `thread_id` 会变成这个分支 ID
 - 页面 URL 里的 `conversationId` 仍然是主会话 UUID
 
-因此实现里对 `thread_id` 的校验必须放行 `branch-*`，
-否则用户在页面上编辑过一次消息，后续所有续接都会报「会话不一致」。
+**实测（2026-11-23）：分支可以当会话句柄用。**
+把 `?conversationId=branch-498dd9e9` 直接导航，服务端返回的是**完整的同一会话内容**
+（能看到主会话全部历史）；在该 URL 下发消息能正常完成，事件的 `thread_id`
+仍然是 `branch-498dd9e9`，且可连续续接。
+
+因此实现里：
+- `thread_id` 校验对 `branch-*` 放行（视为同会话）
+- `branch-*` 可回传作为 `providerSessionId`，支持后续续接
 
 ## 九、已知限制
 
