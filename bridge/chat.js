@@ -14,7 +14,7 @@ import { QuickTurnExtractor } from './quick-protocol.js';
 import { QuickChannel } from './quick-transport.js';
 import { sendUserMessage, waitForComposer, startNewChat, gotoConversation, attachFiles, isGenerating, currentUrl } from './quick-sender.js';
 import { cleanupAttachments } from './attachments.js';
-import { extractThreadIdFromUrl, parseQuickUrl, isThreadAcceptable, isBranchSessionId } from './page.js';
+import { extractThreadIdFromUrl, parseQuickUrl, isThreadAcceptable, isBranchSessionId, isTurnEndedByDom } from './page.js';
 
 const KEEPALIVE_MS = 20000;
 
@@ -56,6 +56,8 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
    * 实测正常长任务的最大静默约 2 分钟，这里给到 6 分钟留足余量。
    */
   const STALL_HARD_CAP_MS = 6 * 60 * 1000;
+  /** [261123-dom-end] 是否见过「正在生成」状态（防止发送后立刻误判为空闲） */
+  let sawGenerating = false;
   /** 请求开始时间（用于「距上次实质内容多久」的兜底计时） */
   const startedAt = Date.now();
   let lastContentAt = 0;
@@ -126,6 +128,21 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
       const elapsed = Math.round(idleTimeoutMs / 1000);
       const generating = await isGenerating(conn).catch(() => false);
       idleStrikes++;
+
+      // [261123-dom-end] 优先用 DOM 判断：页面回到空闲就说明真的结束了。
+      //
+      // 但要防止误判：刚发完消息、Quick 还没开始回应时，页面也是「空闲」的
+      // （无停止按钮 + 输入框已清空）。所以要求：
+      //   · 已经收到过实质内容（exc文本不为空）
+      //   · 且见过「正在生成」状态（说明回复真的开始过）
+      const dom = await isTurnEndedByDom(conn).catch(() => null);
+      if (dom && dom.generating) sawGenerating = true;
+      if (dom && dom.ended && extractor.text.length > 0 && sawGenerating) {
+        log('DOM 判定本轮已结束（无停止按钮、输入框为空），主动收尾' +
+          '（收到 message_complete=' + extractor.finished + '）');
+        finish().catch(e => console.warn('[Chat] finish 异常:', e.message));
+        return;
+      }
       const sinceContentSec = Math.round((Date.now() - (lastContentAt || startedAt)) / 1000);
 
       // [261123-stall-cap] 「页面还在生成」不能无条件放行。
@@ -154,6 +171,34 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
       timedOut = true;
       finish().catch(e => console.warn('[Chat] finish 异常:', e.message));
     }, idleTimeoutMs);
+  };
+
+  /**
+   * [261123-dom-end] 结束前的确认：message_complete 到了之后，
+   * 用 DOM 再确认一次页面是否真的空闲了（没有停止按钮 + 输入框为空）。
+   *
+   * 为什么要 DOM 二次确认：message_complete 只是服务端说「这条消息完了」，
+   * 页面可能还在渲染最后一点内容。用 DOM 状态判断才真正可靠。
+   */
+  const scheduleFinishConfirm = () => {
+    if (finishTimer) return;
+    finishTimer = setTimeout(async () => {
+      finishTimer = null;
+      if (dispatched || aborted) return;
+      if (!extractor.finished) {
+        log('延迟确认期间又收到新内容，继续等待');
+        return;
+      }
+      const dom = await isTurnEndedByDom(conn).catch(() => ({ ended: true }));
+      if (!dom.ended) {
+        log('收到 message_complete，但页面仍在生成中（停止按钮=' + dom.generating +
+          '，输入框空=' + dom.taEmpty + '），继续等 DOM 就绪');
+        scheduleFinishConfirm();
+        return;
+      }
+      log('已确认本轮结束（DOM：无停止按钮、输入框为空）');
+      finish().catch(e => console.warn('[Chat] finish 异常:', e.message));
+    }, FINISH_GRACE_MS);
   };
 
   /** 二次确认时不把 idleStrikes 清零，便于日志统计确认了几次 */
@@ -365,18 +410,7 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
           //
           // 所以改成「延迟确认」：先挂一个短定时器，期间若又收到 message_start
           // （extractor 会把 finished 撤掉）就取消收尾，继续等。
-          if (!finishTimer) {
-            finishTimer = setTimeout(() => {
-              finishTimer = null;
-              if (dispatched || aborted) return;
-              if (!extractor.finished) {
-                log('延迟确认期间又收到新内容，继续等待');
-                return;
-              }
-              log('已确认本轮结束');
-              finish().catch(e => console.warn('[Chat] finish 异常:', e.message));
-            }, FINISH_GRACE_MS);
-          }
+          scheduleFinishConfirm();
         }
       },
       onError: (err) => {

@@ -479,6 +479,42 @@ t+1.8s: ta=true  bodyLen=726              ← 页面才真正重渲染完
 - 正常请求不受影响（15.3s 完成）
 - 单测增至 66 项全过
 
+### 261123-dom-end：用 DOM 判断本轮结束
+
+**背景**：用户提出了更好的思路 —— 与其猜结束事件，不如直接看页面状态。
+
+**用户提供的真实 DOM**（关键发现）：
+```html
+<!-- 空输入框 -->
+<button aria-label="发送消息" disabled>
+
+<!-- 有内容待发 -->
+<button aria-label="发送消息" data-automation-id="chat-send" aria-busy="false">
+
+<!-- AI 正在回复 -->
+<button aria-label="停止生成" data-automation-id="chat-stop">
+```
+
+`data-automation-id` 是给自动化测试用的稳定标识，**不随 UI 语言变化**。
+原来用 `aria-label*="停止"`，中文 UI 换成英文就失效了。
+
+**实现**：
+- `STOP_BUTTON_CANDIDATES` / 发送按钮选择器优先用 `data-automation-id`
+- 新增 `TURN_ENDED_EXPR` / `isTurnEndedByDom()`：
+  「无 chat-stop 按钮 + 输入框为空」判定本轮结束
+- `chat.js` 在两处用它：
+  1. `message_complete` 的延迟确认里做 DOM 二次确认（页面没回空闲就继续等）
+  2. 空闲兜底里优先用 DOM 判断（页面回空闲就立即收尾，不用等超时）
+
+**防误判**：刚发完消息、Quick 还没开始回应时页面也是空闲的。
+所以要求「见过生成中状态 + 已收到过内容」才允许按 DOM 收尾。
+
+**验收**：
+- DOM 判定三态实测全对（空闲 true / 有内容 false / 清空后 true）
+- 真机连发 3 轮全部正常（28.5s / 42.4s / 41.4s），
+  日志均为「已确认本轮结束（DOM：无停止按钮、输入框为空）」
+- 单测增至 69 项全过
+
 ## 遗留
 
 - **文件/图片输入**：Quick 的附件走独立的 `upload-attachment` → DLP 扫描 → `files/upload` 流程，

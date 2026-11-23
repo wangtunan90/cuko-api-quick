@@ -32,10 +32,30 @@ export const SEND_BUTTON_CANDIDATES = [
   'button[data-testid*="send" i]',
 ];
 
-/** 停止生成按钮候选 */
+/**
+ * 停止生成按钮候选
+ *
+ * [261123-dom-end] 实测（用户提供的真实 DOM）：
+ *   生成中：<button aria-label="停止生成" data-automation-id="chat-stop">
+ *   可发送：<button aria-label="发送消息" data-automation-id="chat-send" aria-busy="false">
+ *   空输入：<button aria-label="发送消息" disabled>
+ *
+ * data-automation-id 是给自动化测试用的稳定标识，不随语言/文案变化，
+ * 比 aria-label 靠得住（中文 UI 换成英文就失效了）。
+ * 所以优先用它，aria-label 只作兜底。
+ */
 export const STOP_BUTTON_CANDIDATES = [
+  'button[data-automation-id="chat-stop"]',
   'button[aria-label*="停止"]',
   'button[aria-label*="Stop" i]',
+];
+
+/** 发送按钮候选（同样优先用稳定标识） */
+export const SEND_BUTTON_CANDIDATES_STRICT = [
+  'button[data-automation-id="chat-send"]',
+  'button[aria-label="发送消息"]',
+  'button[aria-label*="发送"]',
+  'button[aria-label*="Send" i]',
 ];
 
 /** 新对话按钮 */
@@ -466,5 +486,79 @@ export async function isAlreadyFreshChat(conn) {
     return !!(v && v.ready && !v.hasConv && v.taEmpty);
   } catch (_) {
     return false;
+  }
+}
+
+/**
+ * 【核心】用 DOM 判断「这一轮是否真的结束了」
+ *
+ * [261123-dom-end] 用户提供了真实 DOM，三个状态可以精确区分：
+ *
+ *   ① 空输入框（没内容、也没在生成）：
+ *      <button aria-label="发送消息" disabled>
+ *
+ *   ② 有内容待发（用户输入了但没发）：
+ *      <button aria-label="发送消息" data-automation-id="chat-send" aria-busy="false">
+ *
+ *   ③ AI 正在回复：
+ *      <button aria-label="停止生成" data-automation-id="chat-stop">
+ *
+ * 判断「本轮结束」的可靠条件：
+ *   - 没有 chat-stop 按钮（不在生成中）
+ *   - 有 chat-send 按钮且 disabled（输入框空 = 我们的消息已被消费）
+ *
+ * 这比等 message_complete 可靠得多 —— 即使结束帧丢了，
+ * 只要页面变成「停止按钮消失 + 发送按钮回到 disabled」，就说明它真的干完了。
+ */
+export const TURN_ENDED_EXPR = `(() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4) return false;
+    const s = getComputedStyle(el);
+    return s.visibility !== 'hidden' && s.display !== 'none';
+  };
+
+  // 1) 停止按钮：存在 = 正在生成
+  const stopBtn = document.querySelector('button[data-automation-id="chat-stop"]');
+  const generating = !!stopBtn && visible(stopBtn);
+
+  // 2) 发送按钮：disabled = 输入框空（我们的消息被消费掉了）
+  const sendBtn = document.querySelector('button[data-automation-id="chat-send"]')
+    || document.querySelector('button[aria-label="发送消息"]');
+  const hasSend = !!sendBtn && visible(sendBtn);
+  const sendDisabled = hasSend ? !!sendBtn.disabled : null;
+
+  // 3) 输入框是否为空
+  const ta = document.querySelector('textarea[placeholder*="提问"]')
+    || document.querySelector('textarea');
+  const taEmpty = ta ? String(ta.value || '').trim().length === 0 : false;
+
+  // 「本轮已结束」= 不在生成 且 输入框空
+  // （输入框空说明我们发的那条已经被页面吃掉了，不会是「还没发出去」）
+  const ended = !generating && taEmpty;
+
+  return {
+    ended,
+    generating,
+    hasSend,
+    sendDisabled,
+    taEmpty,
+    hasStopSelector: !!stopBtn,
+    url: location.href,
+  };
+})()`;
+
+/**
+ * 用 DOM 判断这一轮是否已结束。
+ * @param {object} conn CDP 连接
+ * @returns {Promise<{ended:boolean, generating:boolean, taEmpty:boolean, [k:string]:any}>}
+ */
+export async function isTurnEndedByDom(conn) {
+  try {
+    const r = await conn.Runtime.evaluate({ expression: TURN_ENDED_EXPR, returnByValue: true });
+    return (r && r.result && r.result.value) || { ended: false, generating: false, taEmpty: false };
+  } catch (_) {
+    return { ended: false, generating: false, taEmpty: false, error: true };
   }
 }

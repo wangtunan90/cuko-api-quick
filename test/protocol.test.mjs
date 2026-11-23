@@ -15,7 +15,7 @@ import {
 import { parseQuickUrl, buildConversationUrl, isOnConversation, extractThreadIdFromUrl, buildChatUrl, isMainSessionId, isBranchSessionId, isThreadAcceptable } from '../bridge/page.js';
 import { DEFAULT_PROFILE_VALUES, validateProfile } from '../bridge/default-config.js';
 import { DEFAULT_RUNTIME_CONFIG } from '../bridge/runtime-config.js';
-import { NEW_CHAT_READY_EXPR, waitForNewChatReady, isAlreadyFreshChat } from '../bridge/page.js';
+import { NEW_CHAT_READY_EXPR, waitForNewChatReady, isAlreadyFreshChat, TURN_ENDED_EXPR, isTurnEndedByDom, STOP_BUTTON_CANDIDATES } from '../bridge/page.js';
 import { getVersion } from '../bridge/version.js';
 import { resolveChromePath } from '../bridge/chrome.js';
 import { splitOversizedTexts, materializeFileItems, TEXT_TO_FILE_THRESHOLD, safeFileName, cleanupAttachments } from '../bridge/attachments.js';
@@ -533,4 +533,29 @@ test('硬上限留足余量（至少 5 分钟）', () => {
   // 实测正常长任务最长静默约 2 分钟；上限必须明显大于它
   const CAP_MINUTES = 6;
   assert.ok(CAP_MINUTES >= 5, '硬上限不能太短，否则误杀正常长任务');
+});
+
+// ============ DOM 判定本轮结束 ============
+test('DOM 判定表达式使用稳定标识 data-automation-id', () => {
+  // 用户提供的真实 DOM 里，生成中的按钮是
+  // <button data-automation-id="chat-stop" aria-label="停止生成">
+  // 用 data-automation-id 比 aria-label 靠得住（中文 UI 换英文就失效）
+  assert.ok(TURN_ENDED_EXPR.includes('chat-stop'), '应识别 chat-stop');
+  assert.ok(TURN_ENDED_EXPR.includes('chat-send'), '应识别 chat-send');
+  assert.ok(TURN_ENDED_EXPR.includes('ended'), '应返回 ended 字段');
+  assert.ok(TURN_ENDED_EXPR.includes('generating'), '应返回 generating 字段');
+});
+
+test('停止按钮选择器优先用 data-automation-id', () => {
+  assert.ok(STOP_BUTTON_CANDIDATES.length > 0);
+  assert.ok(STOP_BUTTON_CANDIDATES[0].includes('chat-stop'),
+    '第一个候选应是 data-automation-id="chat-stop"，实际: ' + STOP_BUTTON_CANDIDATES[0]);
+});
+
+test('isTurnEndedByDom 是函数且失败时返回安全默认值', async () => {
+  assert.equal(typeof isTurnEndedByDom, 'function');
+  // 传入一个假的 conn（evaluate 会抛），应返回 { ended: false }
+  const fake = { Runtime: { evaluate: async () => { throw new Error('no page'); } } };
+  const r = await isTurnEndedByDom(fake);
+  assert.equal(r.ended, false, '拿不到页面状态时不能误判为已结束');
 });
