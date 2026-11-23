@@ -15,6 +15,7 @@ import {
 import { parseQuickUrl, buildConversationUrl, isOnConversation, extractThreadIdFromUrl, buildChatUrl } from '../bridge/page.js';
 import { DEFAULT_PROFILE_VALUES, validateProfile } from '../bridge/default-config.js';
 import { DEFAULT_RUNTIME_CONFIG } from '../bridge/runtime-config.js';
+import { getVersion } from '../bridge/version.js';
 import { splitOversizedTexts, materializeFileItems, TEXT_TO_FILE_THRESHOLD, safeFileName, cleanupAttachments } from '../bridge/attachments.js';
 
 const test = (name, fn) => globalThis.__test(name, fn);
@@ -281,4 +282,16 @@ test('openInBrowser 是函数且空 URL 直接返回 false', async () => {
   const { openInBrowser } = await import('../bridge/open-browser.js');
   assert.equal(typeof openInBrowser, 'function');
   assert.equal(await openInBrowser(''), false);
+});
+
+// ============ 版本号 ============
+test('getVersion 在开发环境能读出 package.json 的版本', async () => {
+  const v = getVersion();
+  assert.equal(typeof v, 'string');
+  assert.ok(v.length > 0, '版本号不应为空');
+  assert.ok(/^\d+\.\d+\.\d+/.test(v), '版本号格式应形如 x.y.z，实际 ' + v);
+});
+
+test('getVersion 多次调用结果稳定（有缓存）', () => {
+  assert.equal(getVersion(), getVersion());
 });

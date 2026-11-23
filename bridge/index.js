@@ -41,6 +41,8 @@ import { splitOversizedTexts, materializeFileItems, TEXT_TO_FILE_THRESHOLD } fro
 import { resolveRuntimeConfig, ensureRuntimeConfigFile, portInUseHint, RUNTIME_CONFIG_FILE } from './runtime-config.js';
 // [261123-open-admin] 启动后自动打开管理后台
 import { openInBrowser } from './open-browser.js';
+// [261123-version] 版本号：exe 里不能运行时读 package.json，改由构建时注入
+import { getVersion } from './version.js';
 
 const BASE_DEBUG_PORT = 9222;
 
@@ -102,7 +104,7 @@ const server = http.createServer(async (req, res) => {
       baseUrl: 'http://127.0.0.1:' + HTTP_PORT,
       portSource: runtimeCfg.portSource,
       configFile: RUNTIME_CONFIG_FILE,
-      version: (() => { try { return JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8')).version; } catch { return '0.1.0'; } })(),
+      version: getVersion(),
     });
     return;
   }

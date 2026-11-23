@@ -74,6 +74,11 @@ fs.mkdirSync(DIST_DIR, { recursive: true });
 
 // ---------- 1) 打包成单文件 ESM ----------
 log('打包 bridge/index.js ...');
+// [261123-version] 把版本号在构建时注入。
+// exe 运行时读不到 package.json（cwd / exe 目录都没有），只能靠 define 烧进去。
+const appVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+log('版本号：' + appVersion);
+
 await build({
   entryPoints: [path.join(ROOT, 'bridge', 'index.js')],
   bundle: true,
@@ -81,6 +86,9 @@ await build({
   format: 'esm',
   target: 'esnext',
   outfile: BUNDLE,
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   // ws 的可选原生加速模块：没装时自动回退 JS 实现，不能让 esbuild 去解析
   external: ['bufferutil', 'utf-8-validate'],
   // esbuild 把 CJS 依赖打进 ESM 产物时，require('events') 之类会被 shim 成
