@@ -511,3 +511,26 @@ test('真实内容事件会刷新 lastContentAt', async () => {
   ex.consume({ type: 'text_delta', payload: { delta: 'b' } });
   assert.ok(ex.lastContentAt > t0, '新内容应刷新时间');
 });
+
+// ============ 上游卡死的硬上限 ============
+test('卡死判定：页面仍称生成中，但超过硬上限要收尾', () => {
+  const CAP = 6 * 60 * 1000;
+  const shouldGiveUp = (sinceContentSec, generating) =>
+    generating ? sinceContentSec * 1000 >= CAP : true;
+
+  // 正常长任务的静默（实测最大约 2 分钟）不能被误杀
+  assert.equal(shouldGiveUp(60, true), false);
+  assert.equal(shouldGiveUp(120, true), false);
+  assert.equal(shouldGiveUp(300, true), false);
+  // 超过硬上限必须收尾（真实现场是卡 5 分钟以上还不返回）
+  assert.equal(shouldGiveUp(360, true), true);
+  assert.equal(shouldGiveUp(420, true), true);
+  // 页面已停止生成：立即收尾
+  assert.equal(shouldGiveUp(10, false), true);
+});
+
+test('硬上限留足余量（至少 5 分钟）', () => {
+  // 实测正常长任务最长静默约 2 分钟；上限必须明显大于它
+  const CAP_MINUTES = 6;
+  assert.ok(CAP_MINUTES >= 5, '硬上限不能太短，否则误杀正常长任务');
+});

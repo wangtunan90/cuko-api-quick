@@ -114,7 +114,15 @@ export class QuickChannel {
         if (this.onError) this.onError({ code: err.code, message: err.message });
       }
       for (const evt of parsed.events) {
-        if (!looksLikeChatEvent(evt)) continue;
+        const accepted = looksLikeChatEvent(evt);
+        // [261123-end-diag] 只记录关键事件和「被过滤」的情况，避免逐帧日志刷屏。
+        // message_complete 是否到达是排查「页面结束但客户端收不到」的核心线索。
+        if (!accepted) {
+          this.log('[帧] 过滤掉未知事件 type=' + String(evt && evt.type));
+        } else if (evt && (evt.type === 'message_complete' || evt.type === 'stream_ended' || evt.type === 'turn_aborted')) {
+          this.log('[帧] 收到结束类事件 type=' + evt.type + ' thread=' + String(evt.thread_id || ''));
+        }
+        if (!accepted) continue;
         this.frameCount++;
         if (this.onEvent) this.onEvent(evt);
       }

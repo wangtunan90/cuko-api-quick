@@ -50,6 +50,14 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
   let branchLoggedOnce = false;
   // [261123-keepalive-fix] 卡死兜底：连续无实质内容 + 页面已停止生成 → 主动收尾
   const STALL_GRACE_MS = 90000;
+  /**
+   * [261123-stall-cap] 上游卡死的硬上限：即使页面声称「还在生成」，
+   * 连续这么久没有任何实质内容也判定为卡死。
+   * 实测正常长任务的最大静默约 2 分钟，这里给到 6 分钟留足余量。
+   */
+  const STALL_HARD_CAP_MS = 6 * 60 * 1000;
+  /** 请求开始时间（用于「距上次实质内容多久」的兜底计时） */
+  const startedAt = Date.now();
   let lastContentAt = 0;
   let stallSinceContent = false;
   // [261123-finish-fix] 结束前的延迟确认定时器
@@ -118,17 +126,31 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
       const elapsed = Math.round(idleTimeoutMs / 1000);
       const generating = await isGenerating(conn).catch(() => false);
       idleStrikes++;
-      // [261123-idle-fix] 只要页面还在生成就不判超时（不设次数上限）。
-      // 原因：Quick 的思考阶段可能长时间不下发事件，实测有超过 2 分钟的静默；
-      // 用固定次数上限会在「事件稀疏但任务正常」时误杀。
-      // 真正的兜底交给「请求总超时」（requestTimeoutSec，默认 900s），
-      // 以及页面停止生成后这一轮立刻判超时。
-      if (generating) {
-        log('已 ' + elapsed + 's 无事件，但页面仍在生成中（第 ' + idleStrikes + ' 次确认），继续等待…');
+      const sinceContentSec = Math.round((Date.now() - (lastContentAt || startedAt)) / 1000);
+
+      // [261123-stall-cap] 「页面还在生成」不能无条件放行。
+      //
+      // 实测：Quick 服务端会卡死 —— 页面一直显示「正在处理」、停止按钮一直在，
+      // 但一个事件都不推。旧逻辑看到 isGenerating=true 就无限等，
+      // 客户端只能看着 ": keepalive 260s/280s/.../400s" 干等（真实现场复现过）。
+      //
+      // 所以加一条硬上限：即使页面声称还在生成，只要「连续无实质内容」
+      // 超过 STALL_HARD_CAP_MS，就判定上游卡死并收尾。
+      // 这个上限比正常长任务的最大静默（实测约 2 分钟）留了足够余量。
+      if (generating && sinceContentSec * 1000 < STALL_HARD_CAP_MS) {
+        log('已 ' + elapsed + 's 无事件，但页面仍在生成中（第 ' + idleStrikes + ' 次确认，' +
+          '距上次实质内容 ' + sinceContentSec + 's，硬上限 ' + Math.round(STALL_HARD_CAP_MS / 1000) + 's），继续等待…');
         resetIdleKeepStrikes();
         return;
       }
-      log('空闲超时（' + elapsed + 's 无事件，页面已不在生成），强制结束');
+
+      if (generating) {
+        log('上游疑似卡死：页面仍显示生成中，但已 ' + sinceContentSec + 's 无任何实质内容' +
+          '（超过硬上限 ' + Math.round(STALL_HARD_CAP_MS / 1000) + 's），强制收尾');
+        log('[诊断] 事件统计: ' + JSON.stringify(extractor.eventCounts));
+      } else {
+        log('空闲超时（' + elapsed + 's 无事件，页面已不在生成），强制结束');
+      }
       timedOut = true;
       finish().catch(e => console.warn('[Chat] finish 异常:', e.message));
     }, idleTimeoutMs);
@@ -376,7 +398,6 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
     // [261123-idle-fix] 心跳加厚：SSE 注释帧保持连接不被中间层掐断，
     // 同时把已用时长写进注释，方便排查「到底卡了多久」。
     const keepAliveMs = Math.max(5000, Math.round((cfg.keepAliveSec || 20) * 1000));
-    const startedAt = Date.now();
     // [261123-finish-fix] 兜底：收到 continuation_expected:true 后，
     // 若后续步骤迟迟不来（约 20s 无任何事件），主动收尾。
     // 否则会永远停在 finished=false，客户端表现成「回复完了但一直等待」。
@@ -417,6 +438,19 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
       }
 
       log('检测到卡死：' + Math.round(sinceContent / 1000) + 's 无实质内容且页面已停止生成（message_complete 可能丢失），主动收尾');
+      // [261123-end-diag] 卡死时把现场信息打出来，便于定位到底是哪一环丢了结束事件
+      log('[诊断] 事件统计: ' + JSON.stringify(extractor.eventCounts));
+      log('[诊断] finished=' + extractor.finished +
+        ' awaitingContinuation=' + extractor.awaitingContinuation +
+        ' 正文=' + extractor.text.length + '字' +
+        ' 帧数=' + (channel ? channel.frameCount : '?'));
+      try {
+        const diag = await conn.Runtime.evaluate({
+          expression: '(() => { const b = Array.from(document.querySelectorAll("button")).find(x => (x.getAttribute("aria-label") || "").includes("停止")); return { hasStop: !!b, url: location.href, bodyLen: (document.body.innerText||"").length }; })()',
+          returnByValue: true,
+        });
+        log('[诊断] 页面状态: ' + JSON.stringify(diag && diag.result && diag.result.value));
+      } catch (_) {}
       extractor.consume({ type: 'stream_ended', payload: { message: '长时间无实质进展，已主动收尾' } });
       flush();
       finish().catch((e) => console.warn('[Chat] finish 异常:', e.message));
