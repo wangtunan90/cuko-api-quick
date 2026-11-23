@@ -256,6 +256,25 @@ Quick 的 `thread_id` 就是会话句柄。第一轮从下行事件
 日志中每个请求只有一次「已确认发送」，零次回退回车。
 新增 4 项状态机单测，合计 41 项全过。
 
+### 261123-branch-fix：编辑消息后报「会话不一致」
+
+**现象**：在 Quick 页面上修改/重新生成对话后，再发请求报
+「Provider 不可用（会话不一致：页面在 branch-498dd9e9，期望 d486e356-...）」。
+
+**根因**：`branch-498dd9e9` 是 Quick 给「编辑/重新生成」分配的**临时分支 ID**，
+不是主会话 UUID，两者也没有包含关系。旧实现用严格相等比对 `thread_id`，
+把分支误判成「另一个会话」直接报错。
+
+**修法**：
+- `page.js` 新增 `isMainSessionId` / `isBranchSessionId` / `isThreadAcceptable`
+- `chat.js` 的会话校验改用 `isThreadAcceptable`：`branch-*` 视为同会话放行，
+  真正的不同会话仍然拒绝
+- 不把 `branch-*` 当作 `providerSessionId` 回传（否则下次续接会失效）
+- 客户端若真拿 `branch-*` 来续接，给出可操作提示（请新建对话）
+
+**验收**：同一会话连续 3 轮续接全部正常（6.1s / 7.1s / 7.2s）；
+新增 6 项分支判定单测，合计 47 项全过。
+
 ## 遗留
 
 - **文件/图片输入**：Quick 的附件走独立的 `upload-attachment` → DLP 扫描 → `files/upload` 流程，

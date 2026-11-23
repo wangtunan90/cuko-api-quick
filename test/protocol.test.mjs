@@ -12,7 +12,7 @@ import {
   esDrain, decodeOuterPayload, decodeEventStreamMessage, decodeUplinkFrame,
   encodeUplinkFrame, extractInnerEvents, QuickTurnExtractor,
 } from '../bridge/quick-protocol.js';
-import { parseQuickUrl, buildConversationUrl, isOnConversation, extractThreadIdFromUrl, buildChatUrl } from '../bridge/page.js';
+import { parseQuickUrl, buildConversationUrl, isOnConversation, extractThreadIdFromUrl, buildChatUrl, isMainSessionId, isBranchSessionId, isThreadAcceptable } from '../bridge/page.js';
 import { DEFAULT_PROFILE_VALUES, validateProfile } from '../bridge/default-config.js';
 import { DEFAULT_RUNTIME_CONFIG } from '../bridge/runtime-config.js';
 import { getVersion } from '../bridge/version.js';
@@ -328,4 +328,41 @@ test('lastEventAt 会随事件更新', async () => {
   await new Promise((r) => setTimeout(r, 30));
   ex.consume({ type: 'text_delta', payload: { delta: 'x' } });
   assert.ok(ex.lastEventAt >= t1, '后续事件应更新时间戳');
+});
+
+// ============ 临时分支会话 branch-* ============
+// 用户在页面上「编辑消息 / 重新生成」时，Quick 会分配 branch-xxx 形式的临时分支 ID。
+// 它和主会话 UUID 没有包含关系，旧实现做严格相等比对会误报「会话不一致」。
+const MAIN_SID = 'd486e356-3056-417c-92d0-6811a37889d3';
+const BRANCH_SID = 'branch-498dd9e9';
+
+test('主会话 ID 是 UUID，branch 不是', () => {
+  assert.equal(isMainSessionId(MAIN_SID), true);
+  assert.equal(isMainSessionId(BRANCH_SID), false);
+});
+
+test('能识别 branch-* 形态', () => {
+  assert.equal(isBranchSessionId(BRANCH_SID), true);
+  assert.equal(isBranchSessionId('branch-abc123'), true);
+  assert.equal(isBranchSessionId(MAIN_SID), false);
+});
+
+test('临时分支应按同会话接受，不报「会话不一致」', () => {
+  assert.equal(isThreadAcceptable(BRANCH_SID, MAIN_SID).ok, true);
+  assert.equal(isThreadAcceptable(BRANCH_SID, MAIN_SID).reason, 'branch');
+});
+
+test('完全相同自然接受', () => {
+  assert.equal(isThreadAcceptable(MAIN_SID, MAIN_SID).ok, true);
+});
+
+test('真正的不同会话仍然拒绝', () => {
+  const other = 'aaaa1111-2222-3333-4444-555566667777';
+  assert.equal(isThreadAcceptable(other, MAIN_SID).ok, false);
+  assert.equal(isThreadAcceptable(other, MAIN_SID).reason, 'mismatch');
+});
+
+test('无 thread 或无期望值时放行', () => {
+  assert.equal(isThreadAcceptable('', MAIN_SID).ok, true);
+  assert.equal(isThreadAcceptable(MAIN_SID, '').ok, true);
 });

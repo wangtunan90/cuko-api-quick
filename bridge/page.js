@@ -308,3 +308,49 @@ export function buildChatUrl(accountId) {
     // 不能用 /sn —— 那是落地页。
     : 'https://quick.aws.com/sn/start';
 }
+
+/**
+ * Quick 会话 ID 的形态判别。
+ *
+ * [261123-branch-fix] 实测发现：当用户在页面上「编辑消息 / 重新生成」时，
+ * Quick 会给这次操作分配一个**临时分支 ID**，形如 `branch-498dd9e9`，
+ * 而不是主会话的 UUID。分支 ID 与主会话 UUID 没有包含关系，是并列的。
+ *
+ * 我们按 providerSessionId 做严格比对时，会把 `branch-*` 误判成「另一个会话」，
+ * 从而报「会话不一致」。所以这里要能识别出它是「同一会话的临时分支」。
+ */
+
+/** 主会话 ID 形态：标准 UUID */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** 临时分支形态：branch-<8位十六进制> */
+const BRANCH_RE = /^branch-[0-9a-z]+$/i;
+
+/** 是否主会话 UUID */
+export function isMainSessionId(id) {
+  return UUID_RE.test(String(id || ''));
+}
+
+/** 是否临时分支 ID（编辑消息 / 重新生成时出现） */
+export function isBranchSessionId(id) {
+  return BRANCH_RE.test(String(id || ''));
+}
+
+/**
+ * 判断事件里的 thread_id 是否「可接受」。
+ *
+ * 可接受的情况：
+ *   1. 完全相等（正常续接）
+ *   2. 事件是 branch-* 形式 —— 用户在页面上编辑/重新生成产生的临时分支，
+ *      内容仍属于同一个对话，不应判失败
+ *
+ * @param {string} evtThread 事件里的 thread id
+ * @param {string} expected 请求携带的 providerSessionId
+ * @returns {{ ok: boolean, reason?: string }}
+ */
+export function isThreadAcceptable(evtThread, expected) {
+  if (!evtThread) return { ok: true };                       // 拿不到 thread，放行
+  if (!expected) return { ok: true };                        // 没指定期望值，放行
+  if (String(evtThread) === String(expected)) return { ok: true };
+  if (isBranchSessionId(evtThread)) return { ok: true, reason: 'branch' };
+  return { ok: false, reason: 'mismatch' };
+}

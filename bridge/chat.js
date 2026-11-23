@@ -14,7 +14,7 @@ import { QuickTurnExtractor } from './quick-protocol.js';
 import { QuickChannel } from './quick-transport.js';
 import { sendUserMessage, waitForComposer, startNewChat, gotoConversation, attachFiles, isGenerating, currentUrl } from './quick-sender.js';
 import { cleanupAttachments } from './attachments.js';
-import { extractThreadIdFromUrl, parseQuickUrl } from './page.js';
+import { extractThreadIdFromUrl, parseQuickUrl, isThreadAcceptable, isBranchSessionId } from './page.js';
 
 const KEEPALIVE_MS = 20000;
 
@@ -47,6 +47,7 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
   let totalTimer = null;
   let keepAliveTimer = null;
   let firstEventSeen = false;
+  let branchLoggedOnce = false;
 
   const clearAllTimers = () => {
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
@@ -156,7 +157,8 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
     if (!realSessionId) {
       const url = await currentUrl(conn).catch(() => '');
       const tid = extractThreadIdFromUrl(url);
-      if (tid) {
+      // URL 里的 conversationId 才是稳定的主会话 ID，branch-* 不用
+      if (tid && !isBranchSessionId(tid)) {
         realSessionId = tid;
         log('从页面 URL 提取到 thread id:', tid);
         pushSessionIdIfNeeded();
@@ -245,6 +247,14 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
       // 旧实现只在「新建」时动页面，续接时直接用页面当前停留的会话发消息，
       // 导致客户端传了 A 的 providerSessionId、消息却发进了 B，上下文串台。
       const wantId = String(payload.providerSessionId);
+      // [261123-branch-fix] 客户端如果存下了 branch-*，说明上次拿到的是临时分支，
+      // 这种 ID 无法用来构造会话 URL，直接给出可操作的提示。
+      if (isBranchSessionId(wantId)) {
+        throw new Error(
+          '会话 ID 是临时分支（' + wantId + '），无法续接。' +
+          '这通常是因为上次回复时你在页面上编辑/重新生成了消息。请让客户端新建对话。',
+        );
+      }
       const nav = await gotoConversation(conn, wantId, cfg);
       if (!nav.ok) {
         throw new Error('续接失败：' + nav.error + '。如果你切换过 Quick 账号或清空过登录态，请新建对话。');
@@ -264,11 +274,16 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
         // 长思考、长回复、agent 多步任务、附件解析慢，全都会撞上这个误报。
         firstEventSeen = true;
         resetIdle();
-        // [261123-continue-fix] 续接时如果收到的帧属于别的会话，说明页面根本没切过去。
-        // 旧实现静默 return，结果所有事件被丢弃 → 客户端表现成「超时且无输出」，很难排查。
-        // 现在直接判失败并说明原因。
+        // 续接时校验事件是否属于目标会话。
+        //
+        // [261123-branch-fix] 注意：用户在页面上「编辑消息 / 重新生成」时，
+        // Quick 会给这次操作分配临时分支 ID（形如 branch-498dd9e9），
+        // 它是主会话的并列分支、不是另一个对话。旧实现做严格相等比对，
+        // 把 branch-* 误判成「会话不一致」直接报错。
+        // 现在只对「既不是目标会话、也不是分支」的情况判失败。
         const evtThread = evt.thread_id || (evt.payload && evt.payload.thread_id) || '';
-        if (payload.providerSessionId && evtThread && evtThread !== String(payload.providerSessionId)) {
+        const verdict = isThreadAcceptable(evtThread, payload.providerSessionId);
+        if (!verdict.ok) {
           log('收到其它会话的事件（期望 ' + payload.providerSessionId + '，实际 ' + evtThread + '），判定会话不一致');
           extractor.consume({
             type: 'error',
@@ -277,8 +292,14 @@ export async function handleChat({ res, payload, account, conn, cfg, profile, re
           finish().catch(e => console.warn('[Chat] finish 异常:', e.message));
           return;
         }
+        if (verdict.reason === 'branch' && !branchLoggedOnce) {
+          branchLoggedOnce = true;
+          log('检测到临时分支会话 ' + evtThread + '（页面上编辑/重新生成产生），按同会话处理');
+        }
         extractor.consume(evt);
-        if (!realSessionId && extractor.threadId) {
+        // [261123-branch-fix] 不要把 branch-* 当作 providerSessionId 回传给客户端 ——
+        // 那是临时分支，下次续接时用它构造 URL 会失效。
+        if (!realSessionId && extractor.threadId && !isBranchSessionId(extractor.threadId)) {
           realSessionId = extractor.threadId;
           log('从事件中拿到 thread id:', realSessionId);
           pushSessionIdIfNeeded();
