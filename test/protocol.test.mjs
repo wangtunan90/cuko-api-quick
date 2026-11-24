@@ -572,3 +572,33 @@ test('isTurnEndedByDom 是函数且失败时返回安全默认值', async () => 
   const r = await isTurnEndedByDom(fake);
   assert.equal(r.ended, false, '拿不到页面状态时不能误判为已结束');
 });
+
+// ============ 多项合计超阈值也要转附件 ============
+test('单项超阈值 → 转附件（原有行为不受影响）', () => {
+  const r = splitOversizedTexts([{ kind: 'text', text: 'A'.repeat(25000) }]);
+  assert.equal(r.files.length, 1);
+  cleanupAttachments(r.files);
+});
+
+test('多项都不超，但合计超阈值 → 合并成一个附件', () => {
+  // 场景：Cuko 把工具结果拆成很多小段发来，每段 800 字 × 30 段 = 24000 字
+  // 单看每段都没超，但拼起来照样超 —— 旧实现完全不转，直接塞进输入框
+  const many = Array.from({ length: 30 }, () => ({ kind: 'text', text: '内容'.repeat(400) }));
+  const total = many.reduce((a, x) => a + x.text.length, 0);
+  assert.ok(total > TEXT_TO_FILE_THRESHOLD, '前提：合计要超阈值，实际 ' + total);
+
+  const r = splitOversizedTexts(many);
+  assert.equal(r.files.length, 1, '应合并成一个附件');
+  assert.equal(r.inlineTexts.length, 0, '直发文本应清空');
+  assert.ok(r.summaryNotes[0].includes('段合并'), '摘要应说明来源段数');
+  cleanupAttachments(r.files);
+});
+
+test('多项合计也没超阈值 → 保持直发，不转附件', () => {
+  const r = splitOversizedTexts([
+    { kind: 'text', text: '短1' },
+    { kind: 'text', text: '短2' },
+  ]);
+  assert.equal(r.files.length, 0);
+  assert.equal(r.inlineTexts.length, 2);
+});

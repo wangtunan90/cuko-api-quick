@@ -154,6 +154,19 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // [261123-attach-diag] 诊断：打印实际收到的 input 结构，
+    // 用于排查「超长文本没转成附件」到底卡在哪。
+    try {
+      const raw = Array.isArray(payload.input) ? payload.input : [];
+      const summary = raw.map((it, i) => {
+        const t = it && typeof it === 'object' ? (it.type || '(无type)') : typeof it;
+        const len = it && typeof it.text === 'string' ? it.text.length
+          : it && typeof it.content === 'string' ? it.content.length : 0;
+        return i + ':' + t + '(' + len + '字)';
+      }).join(', ');
+      console.log('[input] 收到 ' + raw.length + ' 项 → ' + summary);
+    } catch (_) {}
+
     // 归一化输入
     const norm = normalizeInputItems(payload.input);
     if (norm.unknown.length) console.warn('[input] 未识别的输入项:', norm.unknown.join(', '));
@@ -163,8 +176,11 @@ const server = http.createServer(async (req, res) => {
     const parts = [...split.inlineTexts, ...split.summaryNotes];
     const text = parts.join('\n\n');
 
+    console.log('[input] 分流结果：直发 ' + split.inlineTexts.length + ' 项（共 ' +
+      split.inlineTexts.reduce((a, t) => a + t.length, 0) + ' 字），转附件 ' + split.files.length + ' 个');
     if (split.files.length) {
-      console.log('[input] ' + split.files.length + ' 个超长文本已转为附件');
+      console.log('[input] ' + split.files.length + ' 个超长文本已转为附件: ' +
+        split.files.map(f => f.fileName).join(', '));
     }
 
     // [261123-attach] Cuko 的 file 项（base64）落盘后走同一条附件通道

@@ -80,7 +80,11 @@ function ensureAttachDirOnce() {
  * @param {number} [threshold] 阈值，默认 TEXT_TO_FILE_THRESHOLD
  * @returns {{ inlineTexts: string[], files: Array<{filePath:string, fileName:string, chars:number}>, summaryNotes: string[] }}
  */
-export function splitOversizedTexts(items, threshold = TEXT_TO_FILE_THRESHOLD) {
+export function splitOversizedTexts(items, threshold = TEXT_TO_FILE_THRESHOLD, opts = {}) {
+  // [261123-attach-total] 除了「单项超阈值」，还要考虑「多项总和超阈值」。
+  // 场景：Cuko 把工具结果拆成很多小段发来（每段 800 字 × 30 段 = 24000 字），
+  // 单看每段都没超，但拼起来照样超 —— 旧实现完全不转，直接塞进输入框。
+  const totalThreshold = opts.totalThreshold || TEXT_TO_FILE_THRESHOLD;
   const inlineTexts = [];
   const files = [];
   const summaryNotes = [];
@@ -107,6 +111,30 @@ export function splitOversizedTexts(items, threshold = TEXT_TO_FILE_THRESHOLD) {
       tail,
     ].join('\n'));
     console.log('[attach] 文本超长转为附件: ' + file.fileName + '（' + text.length + ' 字符）');
+  }
+
+  // 「总量超阈值」兜底：如果前面没产生任何附件，但所有直发文本加起来
+  // 仍然超过阈值，就把它们合并成一个附件（保留首尾摘要）。
+  if (files.length === 0 && inlineTexts.length > 1) {
+    const joined = inlineTexts.join('\n\n');
+    if (joined.length > totalThreshold) {
+      const file = writeTextAttachment(joined, idx++);
+      files.push(file);
+      const head = joined.slice(0, PREVIEW_HEAD);
+      const tail = joined.slice(-PREVIEW_TAIL);
+      summaryNotes.length = 0;
+      summaryNotes.push([
+        '【附件 ' + file.fileName + '】内容过长（' + joined.length + ' 字符，由 ' +
+        inlineTexts.length + ' 段合并），已作为附件发送，请读取附件内容。',
+        '以下是开头片段：',
+        head,
+        '……（中间省略 ' + Math.max(0, joined.length - PREVIEW_HEAD - PREVIEW_TAIL) + ' 字符）……',
+        '结尾片段：',
+        tail,
+      ].join('\n'));
+      inlineTexts.length = 0;
+      console.log('[attach] 多段文本合计超长，合并为附件: ' + file.fileName + '（' + joined.length + ' 字符）');
+    }
   }
 
   return { inlineTexts, files, summaryNotes };
